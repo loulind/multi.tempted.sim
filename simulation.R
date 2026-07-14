@@ -84,7 +84,7 @@ temporal_shapes_default <- list(
 #'   unit-normalise them (FALSE).
 #' @param modality_names Optional length-M character vector.
 #' @param seed Integer seed for full reproducibility.
-#' @return A list with `featuretables`, `timepoints`, `subjectID` (ready for
+#' @return A list with `featuretables`, `timepoints`, `subjectID` (prep for
 #'   `multitempted_all()`), the original components under `truth`, and the
 #'   settings under `params`.
 generate_multitempted_data <- function(
@@ -108,9 +108,9 @@ generate_multitempted_data <- function(
   set.seed(seed)
   
   # -- recycle per-modality scalars and validate --
-  if (length(p) == 1)            p            <- rep(p, M)
+  if (length(p) == 1)            p <- rep(p, M)
   if (length(n_timepoints) == 1) n_timepoints <- rep(n_timepoints, M)
-  if (length(noise_sd) == 1)     noise_sd     <- rep(noise_sd, M)
+  if (length(noise_sd) == 1)     noise_sd <- rep(noise_sd, M)
   if (length(p) != M)            stop("'p' must have length 1 or M.")
   if (length(n_timepoints) != M) stop("'n_timepoints' must have length 1 or M.")
   if (length(noise_sd) != M)     stop("'noise_sd' must have length 1 or M.")
@@ -180,10 +180,10 @@ generate_multitempted_data <- function(
     q <- n_timepoints[m]
     if (sampling == "grid") {
       g <- seq(a_end, b_end, length.out = q)
-      rep(list(g), n)                                  # every subject same grid
+      rep(list(g), n) # every subject same grid
     } else {
       lapply(1:n, function(i)
-        sort(unique(stats::runif(q, a_end, b_end))))   # irregular per subject
+        sort(unique(stats::runif(q, a_end, b_end)))) # irregular per subject
     }
   }
   times_by_mod <- lapply(1:M, draw_times)
@@ -313,7 +313,7 @@ plot_temporal_recovery <- function(sim, fit, report = NULL, file = NULL) {
     tgrid <- fit$time_Zeta[[m]]
     est   <- unit(fit$Zeta_hat[[m]][, lh])
     tru   <- unit(sim$truth$xi[[m]][[match[lh]]](tgrid))
-    if (stats::cor(est, tru) < 0) est <- -est            # align sign for display
+    if (stats::cor(est, tru) < 0) est <- -est # align sign for display
     yl <- range(c(est, tru))
     plot(tgrid, tru, type = "l", lwd = 2, col = "black", ylim = yl,
          xlab = "time", ylab = "loading",
