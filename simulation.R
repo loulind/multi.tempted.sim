@@ -354,9 +354,9 @@ fit <- multitempted_all(
   featuretables = sim$featuretables,
   timepoints    = sim$timepoints,
   subjectID     = sim$subjectID,
-  transforms    = "none",     # already-scaled real values
-  do_ratio      = FALSE,      # not counts
-  centralize    = FALSE,      # no separate mean term in the model
+  transforms    = "none", # already-scaled real values
+  do_ratio      = FALSE, # not counts
+  centralize    = FALSE, # no separate mean term in the model
   r             = pr$r)
 
 cat("\n== Recovery (absolute correlations; 1.000 = perfect) ==\n")
