@@ -28,15 +28,33 @@
 # pak::pkg_install("loulind/multi.tempted")
 library(multi.tempted)
 
-# ---- default temporal loading shapes -------
+# ---- library of temporal loading shapes -------
 # Each shape is a function of u in [0, 1] (the generator maps the real time
 # interval T onto [0, 1] before evaluating, so shapes are independent of the
-# chosen time_range). Component 1 is S-shaped, 2 strictly increasing, 3
-# strictly decreasing. Swap these via `temporal_funcs`.
-temporal_shapes_default <- list(
-  s_curve = function(u) 1 / (1 + exp(-12 * (u - 0.5))), # S-shaped on 0 to 1
-  increasing = function(u) exp(2 * u), # strictly incr on 0 to 1
-  decreasing = function(u) exp(-2 * u) # strictly decr on 0 to 1
+# chosen time_range).
+#
+# By default the generator walks this library in order and hands each modality
+# the next r shapes, so every (modality, component) pair gets a UNIQUE curve:
+# with M = r = 3, mod1 = shapes 1-3, mod2 = shapes 4-6, mod3 = shapes 7-9.
+#
+# The order is deliberate. Each modality gets one monotone, one single-bend and
+# one multi-bend curve. And the two affine pairs (concave/convex and
+# m_shaped/w_shaped, where one is 1 - the other) are split across different
+# modalities: two affinely dependent temporal loadings inside the SAME modality
+# would be degenerate. Swap the whole thing via `temporal_funcs`.
+temporal_shape_library <- list(
+  # -- modality 1 --
+  s_curve    = function(u) 1 / (1 + exp(-12 * (u - 0.5))), # S-shaped
+  concave    = function(u) 1 - 4 * (u - 0.5)^2,            # single peak (cap)
+  decreasing = function(u) exp(-2 * u),                    # strictly decreasing
+  # -- modality 2 --
+  increasing = function(u) exp(2 * u),                     # strictly increasing
+  m_shaped   = function(u) abs(sin(2 * pi * u)),           # two peaks
+  convex     = function(u) 4 * (u - 0.5)^2,                # single trough (cup)
+  # -- modality 3 --
+  plateau    = function(u) 1 - exp(-8 * u),                # fast rise, then flat
+  w_shaped   = function(u) 1 - abs(sin(2 * pi * u)),       # two troughs
+  sine       = function(u) sin(2 * pi * u)                 # one full oscillation
 )
 
 
@@ -70,16 +88,18 @@ temporal_shapes_default <- list(
 #' @param r Number of latent components.
 #' @param n_timepoints Sampled timepoints per subject: scalar or length-M vector.
 #' @param time_range Length-2 numeric giving the continuous interval T.
-#' @param temporal_funcs NULL for the defaults (S / increasing / decreasing);
-#'   or a list of r functions of u in [0,1] used for every modality; or a
-#'   length-M list of such lists to give each modality its own shapes.
+#' @param temporal_funcs NULL to give every (modality, component) pair a unique
+#'   shape from `temporal_shape_library`; or a list of r functions of u in [0,1]
+#'   reused for every modality; or a length-M list of such lists to set each
+#'   modality's shapes explicitly.
 #' @param lambda Component scalings: NULL (auto), a length-r vector (same
 #'   across modalities), or an M x r matrix.
 #' @param lambda_max,lambda_decay Used when lambda = NULL:
 #'   lambda_l = lambda_max * lambda_decay^(l - 1) so decreases wrt l=1..r.
 #' @param noise_sd Gaussian noise SD: scalar or length-M vector.
-#' @param sampling "grid" (evenly spaced times, shared by all subjects) or
-#'   "random" (irregular times drawn per subject).
+#' @param sampling "uniform" (default) draws each subject's timepoints uniformly
+#'   at random from time_range, so subjects (and modalities) are sampled at
+#'   unaligned times. "grid" puts every subject on the same evenly spaced grid.
 #' @param orthonormal  Orthonormalise the A and B loadings (TRUE) or only
 #'   unit-normalise them (FALSE).
 #' @param modality_names Optional length-M character vector.
@@ -99,7 +119,7 @@ generate_multitempted_data <- function(
     lambda_max = 8,
     lambda_decay = 0.6,
     noise_sd = 0.1,
-    sampling = c("grid", "random"),
+    sampling = c("uniform", "grid"),
     orthonormal = TRUE,
     modality_names = NULL,
     seed = 1) {
@@ -149,9 +169,15 @@ generate_multitempted_data <- function(
   
   # -- Temporal loadings (Xi): an M-list of r-lists of L2-normalized functions --
   if (is.null(temporal_funcs)) {
-    if (length(temporal_shapes_default) < r)
-      stop("Provide 'temporal_funcs': fewer than r default shapes are defined.")
-    base_shapes <- rep(list(temporal_shapes_default[1:r]), M)
+    # Unique shape per (modality, component): modality m takes the next r shapes
+    # from the library. Only repeats if M*r outruns the library.
+    L <- length(temporal_shape_library)
+    if (M * r > L)
+      warning(sprintf("M*r = %d exceeds the %d shapes in the library, so shapes repeat.",
+                      M * r, L))
+    idx <- (1:(M * r) - 1) %% L + 1
+    base_shapes <- lapply(1:M, function(m)
+      temporal_shape_library[idx[((m - 1) * r + 1):(m * r)]])
   } else if (is.function(temporal_funcs[[1]])) {
     if (length(temporal_funcs) < r) stop("'temporal_funcs' needs at least r functions.")
     base_shapes <- rep(list(temporal_funcs[1:r]), M)
@@ -162,7 +188,14 @@ generate_multitempted_data <- function(
       fl[1:r]
     })
   }
-  
+
+  # Record which shape landed in each (modality, component) slot, for labelling.
+  shape_names <- matrix(NA_character_, M, r, dimnames = list(modality_names, PCnames))
+  for (m in 1:M) {
+    nm <- names(base_shapes[[m]])
+    if (!is.null(nm)) shape_names[m, ] <- nm
+  }
+
   a_end <- time_range[1]; b_end <- time_range[2]
   to_unit <- function(t) (t - a_end) / (b_end - a_end)
   fine_t  <- seq(a_end, b_end, length.out = 2001)
@@ -178,12 +211,13 @@ generate_multitempted_data <- function(
   # -- Sampling times (t in T_mi): list over modalities of list over subjects --
   draw_times <- function(m) {
     q <- n_timepoints[m]
-    if (sampling == "grid") {
-      g <- seq(a_end, b_end, length.out = q)
-      rep(list(g), n) # every subject same grid
+    if (sampling == "uniform") {
+      # q times drawn uniformly from T, independently per subject, so subjects
+      # (and modalities) land on unaligned timepoints.
+      lapply(1:n, function(i) sort(stats::runif(q, a_end, b_end)))
     } else {
-      lapply(1:n, function(i)
-        sort(unique(stats::runif(q, a_end, b_end)))) # irregular per subject
+      g <- seq(a_end, b_end, length.out = q)
+      rep(list(g), n) # every subject on the same even grid
     }
   }
   times_by_mod <- lapply(1:M, draw_times)
@@ -224,7 +258,8 @@ generate_multitempted_data <- function(
     timepoints    = timepoints,
     subjectID     = subjectID,
     truth = list(A = A_true, B = B_true, Lambda = Lambda_true,
-                 xi = xi_true, times = times_by_mod, time_range = time_range),
+                 xi = xi_true, shape_names = shape_names,
+                 times = times_by_mod, time_range = time_range),
     params = list(n = n, M = M, p = p, r = r, n_timepoints = n_timepoints,
                   noise_sd = noise_sd, sampling = sampling,
                   orthonormal = orthonormal, seed = seed,
@@ -315,9 +350,10 @@ plot_temporal_recovery <- function(sim, fit, report = NULL, file = NULL) {
     tru   <- unit(sim$truth$xi[[m]][[match[lh]]](tgrid))
     if (stats::cor(est, tru) < 0) est <- -est # align sign for display
     yl <- range(c(est, tru))
+    shape <- sim$truth$shape_names[m, match[lh]] # true curve in this slot
     plot(tgrid, tru, type = "l", lwd = 2, col = "black", ylim = yl,
          xlab = "time", ylab = "loading",
-         main = sprintf("%s  PC%d", sim$params$modality_names[m], lh))
+         main = sprintf("%s  PC%d (%s)", sim$params$modality_names[m], lh, shape))
     graphics::lines(tgrid, est, lwd = 2, lty = 2, col = "red")
     if (m == 1 && lh == 1)
       graphics::legend("topleft", c("true", "estimated"), lwd = 2,
@@ -327,19 +363,20 @@ plot_temporal_recovery <- function(sim, fit, report = NULL, file = NULL) {
 
 
 # ============================================================================
-# DEMO (runs only when the file is executed directly, e.g. `Rscript
-# synthetic_analysis.R`; skipped when the file is source()d to load functions)
+# RUN THE SIMULATION
 # ============================================================================
 
 cat("== Generating synthetic multiTEMPTED data ==\n")
-sim <- generate_multitempted_data(r = 3, M=4, seed = 1)
+sim <- generate_multitempted_data(r = 3, M = 3, seed = 1)
 pr <- sim$params
 cat(sprintf("  M=%d modalities, n=%d subjects, p=%s features, %s timepoints/subj\n",
             pr$M, pr$n, paste(pr$p, collapse = "/"),
             paste(pr$n_timepoints, collapse = "/")))
-cat("  temporal shapes: PC1 S-curve, PC2 increasing, PC3 decreasing; ")
-cat(sprintf("noise_sd=%s, sampling=%s\n",
+cat(sprintf("  noise_sd=%s, sampling=%s (times drawn uniformly from T per subject)\n",
             paste(pr$noise_sd, collapse = "/"), pr$sampling))
+
+cat("\n-- temporal shape planted in each (modality, component) slot --\n")
+print(sim$truth$shape_names, quote = FALSE)
 
 cat("\n-- featuretables format (what multitempted_all consumes) --\n")
 ft1 <- sim$featuretables[[1]]
@@ -349,6 +386,16 @@ cat(sprintf("  timepoints[[1]] length %d, subjectID[[1]] length %d (%d unique)\n
             length(sim$timepoints[[1]]), length(sim$subjectID[[1]]),
             length(unique(sim$subjectID[[1]]))))
 
+# RKHS smoothing penalty. The package default (1e-8) is a near-zero ridge. That
+# is fine when every subject shares the same handful of timepoints, because the
+# replication across subjects regularizes the temporal fit on its own. Under
+# uniform sampling every time value is distinct, so a 1e-8 penalty lets the
+# temporal loading INTERPOLATE the residual rather than smooth it -- it soaks up
+# the other components and the whole decomposition mixes (cor_A falls to ~0.5,
+# ~0.1, ~0.05). 1e-4 recovers cleanly; much larger over-smooths the wigglier
+# curves (sine, m_shaped).
+smooth_penalty <- 1e-4
+
 cat("\n== Fitting multitempted_all (centralize=FALSE: data ARE the model) ==\n")
 fit <- multitempted_all(
   featuretables = sim$featuretables,
@@ -357,6 +404,7 @@ fit <- multitempted_all(
   transforms    = "none", # already-scaled real values
   do_ratio      = FALSE, # not counts
   centralize    = FALSE, # no separate mean term in the model
+  smooth        = smooth_penalty,
   r             = pr$r)
 
 cat("\n== Recovery (absolute correlations; 1.000 = perfect) ==\n")
