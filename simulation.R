@@ -28,7 +28,7 @@
 # pak::pkg_install("loulind/multi.tempted")
 library(multi.tempted)
 
-# ---- library of temporal loading shapes -------
+# ---- temporal loading function shapes -------
 # Each shape is a function of u in [0, 1] (the generator maps the real time
 # interval T onto [0, 1] before evaluating, so shapes are independent of the
 # chosen time_range).
@@ -76,9 +76,7 @@ temporal_shape_library <- list(
 }
 
 
-# ============================================================================
-# GENERATE DATA
-# ============================================================================
+# ------- GENERATE DATA -------
 
 #' Generate synthetic data from the multiTEMPTED model.
 #'
@@ -268,9 +266,7 @@ generate_multitempted_data <- function(
 }
 
 
-# ============================================================================
-# RECOVERY ANALYSIS
-# ============================================================================
+# ------- RECOVERY -------
 
 #' Compare a fitted decomposition against the planted ground truth.
 #'
@@ -331,9 +327,7 @@ evaluate_recovery <- function(sim, fit) {
 }
 
 
-# ============================================================================
-# OPTIONAL: overlay true vs estimated temporal loadings
-# ============================================================================
+# ------ PLOT ESTIMATED OVER TRUE ------
 
 #' Plot estimated vs true temporal loadings, one panel per modality x component.
 #' @param file NULL to draw on the current device, or a path to save a PDF.
@@ -362,9 +356,7 @@ plot_temporal_recovery <- function(sim, fit, report = NULL, file = NULL) {
 }
 
 
-# ============================================================================
-# RUN THE SIMULATION
-# ============================================================================
+# ------ RUN THE SIMULATION ---------
 
 cat("== Generating synthetic multiTEMPTED data ==\n")
 sim <- generate_multitempted_data(r = 3, M = 3, seed = 1)
@@ -387,13 +379,10 @@ cat(sprintf("  timepoints[[1]] length %d, subjectID[[1]] length %d (%d unique)\n
             length(unique(sim$subjectID[[1]]))))
 
 # RKHS smoothing penalty. The package default (1e-8) is a near-zero ridge. That
-# is fine when every subject shares the same handful of timepoints, because the
-# replication across subjects regularizes the temporal fit on its own. Under
-# uniform sampling every time value is distinct, so a 1e-8 penalty lets the
-# temporal loading INTERPOLATE the residual rather than smooth it -- it soaks up
-# the other components and the whole decomposition mixes (cor_A falls to ~0.5,
-# ~0.1, ~0.05). 1e-4 recovers cleanly; much larger over-smooths the wigglier
-# curves (sine, m_shaped).
+# is fine when every subject shares the same handful of timepoints. Under
+# uniform sampling, every time value is distinct, so a 1e-8 penalty causes
+# overfitting rather than a smooth fit. Chose smooth=1e-4 which maximized 
+# mean accumulated R^2.
 smooth_penalty <- 1e-4
 
 cat("\n== Fitting multitempted_all (centralize=FALSE: data ARE the model) ==\n")
