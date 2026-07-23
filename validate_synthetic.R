@@ -405,6 +405,6 @@ cat(sprintf("  min subject-loading correlation across components: %.4f\n",
             min(report$per_component$cor_A)))
 
 # save a visual overlay next to the script
-out_pdf <- "recovery.pdf"
+out_pdf <- "validate_synthetic.pdf"
 plot_temporal_recovery(sim, fit, report, file = out_pdf)
 cat(sprintf("  temporal-loading overlay written to %s\n", out_pdf))
