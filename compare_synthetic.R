@@ -128,12 +128,9 @@ run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
   topt <- MOFA2::get_default_training_options(obj)
   topt$seed <- seed; topt$convergence_mode <- convergence; topt$maxiter <- maxiter; topt$verbose <- FALSE
   eopt <- MOFA2::get_default_mefisto_options(obj)
-  eopt$model_groups   <- FALSE   # default TRUE
-  eopt$frac_inducing  <- 0.5     # default 0.75
   if (!optimise_gp) eopt$start_opt <- eopt$opt_freq <- as.integer(maxiter + 1L)
   obj <- MOFA2::prepare_mofa(obj, data_options = dopt, model_options = mopt,
                              training_options = topt, mefisto_options = eopt)
-  obj@mefisto_options$sparseGP <- TRUE
   MOFA2::run_mofa(obj, outfile = file.path(tempdir(), "mefisto_compare.hdf5"),
                   use_basilisk = TRUE, save_data = TRUE)
 }
