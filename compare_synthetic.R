@@ -204,7 +204,7 @@ mt <- multitempted_all(sim$featuretables, sim$timepoints, sim$subjectID,
 if (!requireNamespace("MOFA2", quietly = TRUE)) {
   stop("MOFA2 not installed. Install with: BiocManager::install('MOFA2')")
 }
-cat("\n== Fitting MEFISTO (GP hyperparam optimisation disabled; a few minutes) ==\n")
+cat("\n== Fitting MEFISTO (GP hyperparam optimisation; a few minutes) ==\n")
 mef <- run_mefisto(sim$featuretables, sim$timepoints, sim$subjectID, n_factors = pr$r)
 mdec <- mefisto_decompose(mef, pr$r)
 Wm <- MOFA2::get_weights(mef)
