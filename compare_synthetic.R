@@ -25,11 +25,6 @@
 #   convergence "fast"   -> set MEF_CONVERGENCE <- "slow" for a stricter fit
 #   n = 12 subjects      -> MEFISTO's per-subject GP scales poorly; raising n
 #                           makes it much slower (multiTEMPTED does not care)
-#   GP hyperparameter optimisation is DISABLED (MEF_OPTIMISE_GP <- FALSE). This
-#     one is NOT just for speed: on unaligned, >=2-view data in this environment
-#     mofapy2's GP optimiser either crashes or hangs indefinitely. Setting
-#     MEF_OPTIMISE_GP <- TRUE restores MEFISTO's full GP (tunes the lengthscale)
-#     but is expected to crash/hang here; try it only on smaller/ aligned data.
 # ============================================================================
 
 library(multi.tempted)
