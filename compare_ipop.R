@@ -1,5 +1,5 @@
 # ============================================================================
-# semi_synthetic.R
+# compare_ipop.R
 #
 # Apply BOTH multiTEMPTED and MEFISTO (MOFA2) to the REAL iPOP longitudinal
 # multi-omic dataset shipped with the multi.tempted package, and compare them.
@@ -11,14 +11,29 @@
 # measured at 5 shared visits during an exercise challenge. All modalities are on
 # a log10 scale and share visits, so samples are naturally aligned across views.
 #
-# NOTE: the MEFISTO step trains a per-subject Gaussian process and takes several
-# minutes. Its GP hyperparameter optimisation crashes mofapy2 with >= 3 views on
-# this machine, so we disable it (optimise_gp = FALSE); the GP still smooths the
-# factors with its initial lengthscale.
+# --- MEFISTO speed settings used here, and how to undo them -------------------
+# The MEFISTO step trains a per-subject Gaussian process and is the slow part
+# (~10 min). The knobs are set just below the library() call:
+#   MEF_MAXITER = 150      -> raise (e.g. 1000) for full convergence
+#   MEF_CONVERGENCE "fast" -> set "slow" for a stricter convergence criterion
+#   MEF_OPTIMISE_GP FALSE  -> the GP hyperparameter (lengthscale) optimisation is
+#                             DISABLED. This is not just for speed: on this machine
+#                             mofapy2's GP optimiser crashes with >= 3 views (iPOP
+#                             has 4). Setting it TRUE restores the full GP but is
+#                             expected to crash here; with it off the GP still
+#                             smooths the factors at its initial lengthscale.
+# Also: MEFISTO needs every subject at the same visit times, so we keep only
+# complete-visit subjects (applied to both methods); multiTEMPTED would not need
+# this.
 # ============================================================================
 
 # pak::pkg_install("loulind/multi.tempted")
 library(multi.tempted)
+
+# --- MEFISTO speed / capability knobs (see the header note) -------------------
+MEF_MAXITER     <- 1000      # iterations; raise for a fuller fit
+MEF_CONVERGENCE <- "slow"   # "fast" or "slow"
+MEF_OPTIMISE_GP <- TRUE    # TRUE = full GP lengthscale tuning
 
 # ---- load & format iPOP ----------------------------------------------------
 ip   <- multi.tempted::ipop
@@ -88,7 +103,8 @@ mofa_long_from <- function(featuretables, timepoints, subjectID) {
 
 # Prep + train MEFISTO (subjects = groups, time = covariate).
 run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
-                        seed = 1, maxiter = 50, optimise_gp = FALSE) {
+                        seed = 1, maxiter = MEF_MAXITER,
+                        convergence = MEF_CONVERGENCE, optimise_gp = MEF_OPTIMISE_GP) {
   long   <- mofa_long_from(featuretables, timepoints, subjectID)
   cov_df <- unique(long[, c("sample", "time")])
   cov_df <- data.frame(sample = cov_df$sample, covariate = "time", value = cov_df$time)
@@ -99,7 +115,7 @@ run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
   dopt <- MOFA2::get_default_data_options(obj)
   mopt <- MOFA2::get_default_model_options(obj);   mopt$num_factors <- n_factors
   topt <- MOFA2::get_default_training_options(obj)
-  topt$seed <- seed; topt$convergence_mode <- "fast"
+  topt$seed <- seed; topt$convergence_mode <- convergence
   topt$maxiter <- maxiter; topt$verbose <- FALSE
   eopt <- MOFA2::get_default_mefisto_options(obj)
   if (!optimise_gp)                            # skip the (crashing) GP hyperparam step
@@ -116,9 +132,8 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
           "  BiocManager::install('MOFA2')   # basilisk supplies the Python backend")
 } else {
   cat("\n== MEFISTO on iPOP (subjects as groups, time as covariate) ==\n")
-  cat("   training ... this is the slow step (~10 min); raise maxiter for a fuller fit\n")
-  mef <- run_mefisto(featuretables, timepoints, subjectID,
-                     n_factors = r, maxiter = 150, optimise_gp = FALSE)
+  cat("   training ... this is the slow step (~10 min); raise MEF_MAXITER for a fuller fit\n")
+  mef <- run_mefisto(featuretables, timepoints, subjectID, n_factors = r)
 
   # ---- (i) feature-loading agreement, per modality --------------------------
   # For each multiTEMPTED component, the best |cor| with any MEFISTO factor's
