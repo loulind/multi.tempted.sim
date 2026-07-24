@@ -29,8 +29,8 @@
 
 library(multi.tempted)
 
-MEF_MAXITER <- 100
-MEF_CONVERGENCE  <- "fast"
+MEF_MAXITER <- 5000
+MEF_CONVERGENCE  <- "slow"
 MEF_OPTIMISE_GP  <- TRUE
 SEED <- 1
 
