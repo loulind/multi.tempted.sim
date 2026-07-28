@@ -353,6 +353,23 @@ plot_temporal_recovery <- function(sim, fit, report = NULL, file = NULL) {
       graphics::legend("topleft", c("true", "estimated"), lwd = 2,
                        lty = c(1, 2), col = c("black", "red"), bty = "n", cex = 0.8)
   }
+
+  # --- final page: the tables also printed to the log ---
+  graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
+  tbl <- c(
+    "Planted temporal shape per (modality, component):",
+    utils::capture.output(print(sim$truth$shape_names, quote = FALSE)),
+    "",
+    "Recovery vs ground truth (absolute correlation; 1.000 = perfect):",
+    utils::capture.output(print(report$per_component, row.names = FALSE)),
+    "",
+    sprintf("final accumulated R^2 per modality: %s",
+            paste(sprintf("%.3f", report$final_r2), collapse = ", ")),
+    sprintf("min subject-loading correlation across components: %.4f",
+            min(report$per_component$cor_A)))
+  graphics::plot.new()
+  graphics::mtext("multiTEMPTED recovery (log output)", side = 3, line = 0.5, font = 2)
+  graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.85)
 }
 
 

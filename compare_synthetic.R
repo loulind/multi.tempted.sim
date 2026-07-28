@@ -1,86 +1,111 @@
 # ============================================================================
 # compare_synthetic.R
 #
-# Head-to-head of multiTEMPTED vs MEFISTO (MOFA2) on ONE fully synthetic dataset,
-# formatted two ways -- once for each method -- so the comparison is as direct as
-# possible (identical underlying values and ground truth; only the container and
-# the way each method ingests time differ).
+# Head-to-head of multiTEMPTED vs MEFISTO (MOFA2) on ONE fully synthetic dataset
+# with a KNOWN block structure, formatted for both methods.
 #
-# Design choices that make the comparison FAIR:
-#   * SHARED temporal dynamics across modalities. multiTEMPTED allows a different
-#     time curve per modality; MEFISTO uses one factor trajectory shared across
-#     views. Making the true curves shared means BOTH models can represent the
-#     data, so neither is handicapped by construction.
-#   * Both formats carry the SAME time UNALIGNMENT across subjects AND modalities
-#     (each subject, and each modality, is sampled at its own random times).
+# Data design (block / biclustering structure):
+#   * Subjects are split into r groups, one group per component.
+#   * Each modality's features are split into r subsets, one per component.
+#   * Component l is "on" only for group-l subjects and their subset-l features
+#     (large loadings there, near-zero elsewhere).
+#   * Every component uses the SAME temporal function across modalities, so both
+#     models can represent the data (MEFISTO shares one factor trajectory across
+#     views; multiTEMPTED shares the subject loading).
+# So each component is a clean block: group-l subjects x subset-l features,
+# evolving as xi_l(t). The question is whether each method recovers the temporal
+# functions and separates the subject groups into the right components.
 #
-# The truth is generated from the multiTEMPTED model (shared subject loading a,
-# per-modality feature loadings b, shared temporal functions xi). Because the
-# curves are shared, this is exactly representable by MEFISTO too: its weights W
-# play the role of b, and its factor Z_i(t) = a_i * xi(t) (a subject-scaled copy
-# of the shared curve).
+# The 3 subject GROUPS are LATENT: MEFISTO is given subjects-as-groups only (its
+# per-subject GP), never told which subjects belong together. Both methods must
+# discover the block structure.
 #
-# --- MEFISTO time-saving settings used here, and how to undo them -------------
-#   maxiter = 100        -> raise (e.g. 1000) for full convergence
-#   convergence "fast"   -> set MEF_CONVERGENCE <- "slow" for a stricter fit
-#   n = 12 subjects      -> MEFISTO's per-subject GP scales poorly; raising n
-#                           makes it much slower (multiTEMPTED does not care)
+# --- MEFISTO speed settings used here, and how to undo them -------------------
+# The MEFISTO step is the slow part. Knobs are just below (edit them to taste):
+#   MEF_MAXITER = 100      -> raise (e.g. 1000) for full convergence
+#   MEF_CONVERGENCE "fast" -> set "slow" for a stricter convergence criterion
+#   MEF_OPTIMISE_GP FALSE  -> the GP lengthscale optimisation. It DOES run with
+#                             it TRUE (even with >=3 views), but it is much slower,
+#                             especially with unaligned timepoints. Off here just
+#                             for quick checking; turn it on for the real run.
+#   SAMPLING "uniform"     -> how timepoints are placed (see below). Unaligned
+#                             sampling is far slower for MEFISTO than "aligned".
 # ============================================================================
 
 library(multi.tempted)
 
-MEF_MAXITER <- 5000
-MEF_CONVERGENCE  <- "slow"
-MEF_OPTIMISE_GP  <- TRUE
-SEED <- 1
+# --- knobs --------------------------------------------------------------------
+MEF_MAXITER     <- 1000        # MEFISTO iterations
+MEF_CONVERGENCE <- "fast"     # "fast" or "slow"
+MEF_OPTIMISE_GP <- TRUE      # TRUE = tune GP lengthscale (works but much slower)
+SAMPLING        <- "aligned"  # "aligned"  : every subject & modality on one shared grid
+                              # "clustered": small random jitter around a shared grid
+                              # "uniform"  : fully random per subject & modality
+                              #  ("aligned" gives MEFISTO co-measured samples across
+                              #   modalities and is much faster; "uniform" is the
+                              #   hardest, fully cross-modality-unaligned case.)
 
 
 # ============================================================================
-# GENERATOR  (copy of the generator from validate_synthetic.R)
+# GENERATOR
 # ============================================================================
-
 temporal_shape_library <- list(
-  s_curve = function(u) 1 / (1 + exp(-12 * (u - 0.5))),  # S-shaped
-  increasing = function(u) exp(2 * u), # strictly increasing
-  decreasing = function(u) exp(-2 * u) # strictly decreasing
+  s_curve    = function(u) 1 / (1 + exp(-12 * (u - 0.5))),  # S-shaped
+  increasing = function(u) exp(2 * u),                      # strictly increasing
+  decreasing = function(u) exp(-2 * u)                      # strictly decreasing
 )
-
 .trapz <- function(x, y) sum(diff(x) * (utils::head(y, -1) + utils::tail(y, -1)) / 2)
 
-.make_loadings <- function(nr, r) qr.Q(qr(matrix(stats::rnorm(nr * r), nr, r)))[, 1:r, drop = FALSE]
-
-# Generate synthetic data from the multiTEMPTED model with dynamics SHARED across
-# modalities and uniformly-random (unaligned) sampling times.
-generate_shared_data <- function(n = 12, M = 2, p = 20, r = 3, n_timepoints = 10,
-                                 shapes = temporal_shape_library,
-                                 lambda = c(8, 5, 3), noise_sd = 0.1,
-                                 time_range = c(0, 1), seed = SEED) {
+# Block-structured data from the multiTEMPTED model with shared temporal dynamics.
+generate_block_data <- function(n = 15, M = 3, p = 24, r = 3, n_timepoints = 8,
+                                shapes = temporal_shape_library, lambda = c(8, 6, 4),
+                                noise_sd = 0.1, offgroup = 0.05, sampling = "uniform",
+                                time_range = c(0, 1), seed = 1) {
   set.seed(seed)
-  if (length(shapes) < r) stop("need >= r shapes")
-  mod  <- paste0("mod", 1:M); subj <- sprintf("subj%02d", 1:n); PC <- paste0("PC", 1:r)
+  mod <- paste0("mod", 1:M); subj <- sprintf("subj%02d", 1:n); PC <- paste0("PC", 1:r)
+  a_end <- time_range[1]; b_end <- time_range[2]
 
-  Lambda <- matrix(lambda[1:r], M, r, byrow = TRUE, dimnames = list(mod, PC))
-  A <- .make_loadings(n, r); dimnames(A) <- list(subj, PC)
+  # subjects and features assigned to r blocks (one per component)
+  subj_group <- rep(1:r, length.out = n)
+  feat_group <- rep(1:r, length.out = p)
+
+  # block subject loadings: large in-group, near-zero elsewhere
+  A <- matrix(offgroup * abs(stats::rnorm(n * r)), n, r)
+  for (l in 1:r) { g <- subj_group == l; A[g, l] <- 1 + 0.2 * abs(stats::rnorm(sum(g))) }
+  A <- apply(A, 2, function(x) x / sqrt(sum(x^2))); dimnames(A) <- list(subj, PC)
+
+  # block feature loadings per modality
   B <- lapply(1:M, function(m) {
-    Bm <- .make_loadings(p, r)
+    Bm <- matrix(offgroup * abs(stats::rnorm(p * r)), p, r)
+    for (l in 1:r) { g <- feat_group == l; Bm[g, l] <- 1 + 0.2 * abs(stats::rnorm(sum(g))) }
+    Bm <- apply(Bm, 2, function(x) x / sqrt(sum(x^2)))
     dimnames(Bm) <- list(sprintf("%s_feat%02d", mod[m], 1:p), PC); Bm
   }); names(B) <- mod
 
-  # L2-normalise the r shared shapes on the interval T
-  a_end <- time_range[1]; b_end <- time_range[2]; fine <- seq(a_end, b_end, length.out = 2001)
+  Lambda <- matrix(lambda[1:r], M, r, byrow = TRUE, dimnames = list(mod, PC))
+
+  # shared, L2-normalised temporal functions (same curve per component in every modality)
+  fine <- seq(a_end, b_end, length.out = 2001)
   xi <- lapply(1:r, function(l) {
     g <- function(t) shapes[[l]]((t - a_end) / (b_end - a_end))
-    nrm <- sqrt(.trapz(fine, g(fine)^2)); function(t) g(t) / nrm
-  })
+    nrm <- sqrt(.trapz(fine, g(fine)^2)); function(t) g(t) / nrm })
+
+  grid <- seq(a_end, b_end, length.out = n_timepoints)
+  cw   <- 0.3 * (b_end - a_end) / (n_timepoints - 1)   # cluster half-width
+  draw_times <- function() {
+    if (sampling == "aligned")   grid
+    else if (sampling == "clustered")
+      sort(pmin(pmax(grid + stats::runif(n_timepoints, -cw, cw), a_end), b_end))
+    else sort(stats::runif(n_timepoints, a_end, b_end))
+  }
 
   featuretables <- timepoints <- subjectID <- vector("list", M)
   for (m in 1:M) {
     per <- vector("list", n); tvec <- numeric(0); svec <- character(0)
     for (i in 1:n) {
-      ts <- sort(stats::runif(n_timepoints, a_end, b_end))      # unaligned per subject & modality
-      Xi <- vapply(1:r, function(l) xi[[l]](ts), numeric(length(ts)))  # q x r
-      coef   <- Lambda[m, ] * A[i, ]
-      signal <- B[[m]] %*% (t(Xi) * coef)                       # p x q
+      ts <- draw_times()
+      Xi <- vapply(1:r, function(l) xi[[l]](ts), numeric(length(ts)))
+      signal <- B[[m]] %*% (t(Xi) * (Lambda[m, ] * A[i, ]))
       per[[i]] <- t(signal + matrix(stats::rnorm(p * length(ts), sd = noise_sd), p))
       tvec <- c(tvec, ts); svec <- c(svec, rep(subj[i], length(ts)))
     }
@@ -90,9 +115,11 @@ generate_shared_data <- function(n = 12, M = 2, p = 20, r = 3, n_timepoints = 10
   names(featuretables) <- names(timepoints) <- names(subjectID) <- mod
 
   list(featuretables = featuretables, timepoints = timepoints, subjectID = subjectID,
-       truth = list(A = A, B = B, Lambda = Lambda, xi = xi),
+       truth = list(A = A, B = B, Lambda = Lambda, xi = xi,
+                    subj_group = subj_group, feat_group = feat_group),
        params = list(n = n, M = M, p = p, r = r, n_timepoints = n_timepoints,
-                     noise_sd = noise_sd, time_range = time_range, modality_names = mod))
+                     noise_sd = noise_sd, sampling = sampling, time_range = time_range,
+                     modality_names = mod))
 }
 
 
@@ -100,14 +127,14 @@ generate_shared_data <- function(n = 12, M = 2, p = 20, r = 3, n_timepoints = 10
 # MEFISTO helpers
 # ============================================================================
 
-# Long-format MOFA input; samples keyed by (subject, modality, time). Because the
-# modalities are sampled at different times, each sample carries ONE modality --
-# MEFISTO must link modalities through its temporal GP alone.
+# Long-format MOFA input; samples keyed by (subject, time) -- so modalities
+# sampled at the SAME time share a sample (aligned => co-measured), while
+# modalities at different times give separate, single-view samples.
 mofa_long_from <- function(featuretables, timepoints, subjectID) {
   M <- length(featuretables); mod <- names(featuretables)
   do.call(rbind, lapply(1:M, function(m) {
     ft <- as.matrix(featuretables[[m]]); tp <- as.numeric(timepoints[[m]]); sid <- as.character(subjectID[[m]])
-    samp <- paste0(sid, "@", mod[m], "t", formatC(tp, format = "f", digits = 5))
+    samp <- paste0(sid, "@t", formatC(tp, format = "f", digits = 6))
     data.frame(sample = rep(samp, times = ncol(ft)), group = rep(sid, times = ncol(ft)),
                feature = rep(colnames(ft), each = nrow(ft)), view = mod[m],
                value = as.vector(ft), time = rep(tp, times = ncol(ft)), stringsAsFactors = FALSE)
@@ -116,13 +143,12 @@ mofa_long_from <- function(featuretables, timepoints, subjectID) {
 
 run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
                         maxiter = MEF_MAXITER, convergence = MEF_CONVERGENCE,
-                        optimise_gp = MEF_OPTIMISE_GP, seed = SEED) {
+                        optimise_gp = MEF_OPTIMISE_GP, seed = 1) {
   long   <- mofa_long_from(featuretables, timepoints, subjectID)
   cov_df <- unique(long[, c("sample", "time")])
   cov_df <- data.frame(sample = cov_df$sample, covariate = "time", value = cov_df$time)
-
   obj  <- MOFA2::create_mofa(long[, c("sample", "group", "feature", "view", "value")])
-  obj  <- MOFA2::set_covariates(obj, covariates = cov_df)
+  obj  <- MOFA2::set_covariates(obj, covariates = cov_df)      # groups = subjects, covariate = time
   dopt <- MOFA2::get_default_data_options(obj)
   mopt <- MOFA2::get_default_model_options(obj);  mopt$num_factors <- n_factors
   topt <- MOFA2::get_default_training_options(obj)
@@ -135,59 +161,45 @@ run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
                   use_basilisk = TRUE, save_data = TRUE)
 }
 
-# Split each MEFISTO factor into a subject scale (u) and a temporal shape (v) via
-# an SVD of its (subject x time-bin) matrix, mirroring multiTEMPTED's a * xi.
-mefisto_decompose <- function(model, r, n_bins = 15) {
-  Z  <- do.call(rbind, MOFA2::get_factors(model, groups = "all")) # samples x factors
-  sm <- MOFA2::samples_metadata(model) 
-  ord  <- match(rownames(Z), sm$sample)
-  tvec <- sm$time[ord]; gvec <- sm$group[ord]
-  subs <- sort(unique(gvec))
-  br   <- seq(min(tvec), max(tvec), length.out = n_bins + 1)
-  bin  <- cut(tvec, br, include.lowest = TRUE, labels = FALSE)
+# Split each MEFISTO factor into subject scale (u) and temporal shape (v) via an
+# SVD of its (subject x time-bin) matrix, mirroring multiTEMPTED's a * xi.
+mefisto_decompose <- function(model, r, n_bins = 12) {
+  Z  <- do.call(rbind, MOFA2::get_factors(model, groups = "all"))    # samples x factors
+  sm <- MOFA2::samples_metadata(model); ord <- match(rownames(Z), sm$sample)
+  tvec <- sm$time[ord]; gvec <- sm$group[ord]; subs <- sort(unique(gvec))
+  br  <- seq(min(tvec), max(tvec), length.out = n_bins + 1)
+  bin <- cut(tvec, br, include.lowest = TRUE, labels = FALSE)
   centers <- (utils::head(br, -1) + utils::tail(br, -1)) / 2
-
   shapes <- matrix(0, n_bins, r); uscale <- matrix(0, length(subs), r, dimnames = list(subs, NULL))
   for (k in 1:r) {
     Mmat <- matrix(NA_real_, length(subs), n_bins)
-    for (si in seq_along(subs)) {
-      sel <- gvec == subs[si]
-      for (b in unique(bin[sel])) Mmat[si, b] <- mean(Z[sel & bin == b, k])
-    }
-    keep <- colSums(!is.na(Mmat)) > 0                    # drop empty bins
+    for (si in seq_along(subs)) { sel <- gvec == subs[si]
+      for (b in unique(bin[sel])) Mmat[si, b] <- mean(Z[sel & bin == b, k]) }
+    keep <- colSums(!is.na(Mmat)) > 0
     Mk <- Mmat[, keep, drop = FALSE]
     for (b in seq_len(ncol(Mk))) { na <- is.na(Mk[, b]); if (any(na)) Mk[na, b] <- mean(Mk[!na, b]) }
-    sv <- svd(Mk, nu = 1, nv = 1)
-    shapes[keep, k] <- sv$v[, 1]; uscale[, k] <- sv$u[, 1]
+    sv <- svd(Mk, nu = 1, nv = 1); shapes[keep, k] <- sv$v[, 1]; uscale[, k] <- sv$u[, 1]
   }
   list(centers = centers, shapes = shapes, uscale = uscale)
 }
 
 
 # ============================================================================
-# 1. GENERATE ONE DATASET, FORMAT FOR BOTH METHODS
+# 1. GENERATE + SUMMARISE
 # ============================================================================
-cat("== Generating one synthetic dataset (shared dynamics, unaligned times) ==\n")
-sim <- generate_shared_data(n = 12, M = 2, p = 20, r = 3, n_timepoints = 10,
-                            shapes = temporal_shape_library, lambda = c(8, 5, 3),
-                            noise_sd = 0.1, seed = SEED)
-pr  <- sim$params
-long <- mofa_long_from(sim$featuretables, sim$timepoints, sim$subjectID)
-
-cat("\n-- the two formats of the SAME data --\n")
-cat(sprintf("  SHARED: %d subjects, %d modalities, %d features/modality, %d timepoints/subject,\n",
-            pr$n, pr$M, pr$p, pr$n_timepoints))
-cat(sprintf("          r=%d components, noise_sd=%.2f; times drawn uniformly at random per subject\n",
-            pr$r, pr$noise_sd))
-cat(sprintf("          AND per modality (so times are unaligned across both).\n"))
-cat(sprintf("  multiTEMPTED format: %d feature tables, each %d samples x %d features, with a\n",
-            pr$M, pr$n * pr$n_timepoints, pr$p))
-cat("          per-modality time vector (time handled natively).\n")
-cat(sprintf("  MEFISTO format:      one long table, %d rows, %d samples keyed by (subject,modality,\n",
-            nrow(long), length(unique(long$sample))))
-cat("          time); each sample has ONE modality (others missing), so MEFISTO links\n")
-cat("          modalities only through its temporal GP.\n")
-cat("  DIFFERENCE: representation only -- identical values, subjects, times, and ground truth.\n")
+cat("== Generating one block-structured dataset ==\n")
+sim <- generate_block_data(n = 15, M = 3, p = 24, r = 3, n_timepoints = 8,
+                           sampling = SAMPLING, seed = 1)
+pr <- sim$params
+gsz <- table(sim$truth$subj_group); fsz <- table(sim$truth$feat_group)
+cat(sprintf("  %d subjects in %d groups (sizes %s); %d modalities; %d features/modality\n",
+            pr$n, pr$r, paste(gsz, collapse = "/"), pr$M, pr$p))
+cat(sprintf("  each component = one subject group x one feature subset (sizes %s per modality)\n",
+            paste(fsz, collapse = "/")))
+cat(sprintf("  temporal functions shared across modalities: %s\n",
+            paste(names(temporal_shape_library)[1:pr$r], collapse = ", ")))
+cat(sprintf("  sampling = '%s', %d timepoints/subject, noise_sd = %.2f\n",
+            pr$sampling, pr$n_timepoints, pr$noise_sd))
 
 
 # ============================================================================
@@ -198,83 +210,71 @@ mt <- multitempted_all(sim$featuretables, sim$timepoints, sim$subjectID,
                        transforms = "none", do_ratio = FALSE, centralize = FALSE,
                        smooth = 1e-4, r = pr$r)
 
-if (!requireNamespace("MOFA2", quietly = TRUE)) {
-  stop("MOFA2 not installed. Install with: BiocManager::install('MOFA2')")
-}
-cat("\n== Fitting MEFISTO (GP hyperparam optimisation; a few minutes) ==\n")
-mef <- run_mefisto(sim$featuretables, sim$timepoints, sim$subjectID, n_factors = pr$r)
+if (!requireNamespace("MOFA2", quietly = TRUE)) stop("Install MOFA2: BiocManager::install('MOFA2')")
+cat(sprintf("\n== Fitting MEFISTO (maxiter=%d, %s, GP-opt=%s) ==\n",
+            MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP))
+mef  <- run_mefisto(sim$featuretables, sim$timepoints, sim$subjectID, n_factors = pr$r)
 mdec <- mefisto_decompose(mef, pr$r)
-Wm <- MOFA2::get_weights(mef)
 
 
 # ============================================================================
-# 3. RECOVERY METRICS (both methods vs the SAME ground truth)
+# 3. COMPARE: functional estimation + group separation
 # ============================================================================
-# All loadings are identified up to sign/scale, so we use absolute correlation.
-r <- pr$r; M <- pr$M; mods <- pr$modality_names
-A_true <- sim$truth$A
+r <- pr$r; M <- pr$M; grp <- sim$truth$subj_group; A_true <- sim$truth$A
 
-# match estimated components to true components greedily by subject loadings
-greedy_match <- function(est_subj) {         # est_subj: n x r
-  cm <- abs(stats::cor(est_subj, A_true)); mt <- integer(r); used <- logical(r)
-  for (k in 1:r) { c <- cm[k, ]; c[used] <- -Inf; j <- which.max(c); mt[k] <- j; used[j] <- TRUE }
-  mt   # mt[k] = true component matched to estimated column k
+# per-subject scores for each method
+mt_load <- mt$A_hat                                          # subjects x r
+Zsub    <- t(sapply(MOFA2::get_factors(mef, groups = "all"), colMeans))  # subjects x factors
+Zsub    <- Zsub[rownames(mt_load), , drop = FALSE]
+
+# ONE matching drives everything: assign each subject to its argmax component,
+# then choose the component->group labelling that maximises agreement. This same
+# component-per-group mapping is used for both group separation and functional
+# recovery, so the two never disagree.
+.all_perms <- function(v) if (length(v) == 1) list(v) else
+  do.call(c, lapply(seq_along(v), function(i)
+    lapply(.all_perms(v[-i]), function(p) c(v[i], p))))
+assign_map <- function(load) {
+  pred  <- apply(abs(load), 1, which.max)                       # subject -> component
+  perms <- .all_perms(1:r)
+  bp    <- perms[[which.max(vapply(perms, function(pm) mean(pm[pred] == grp), numeric(1)))]]
+  list(pred = pred,
+       comp_of_group = vapply(1:r, function(l) which(bp == l), integer(1)),  # group -> component
+       accuracy = mean(bp[pred] == grp))
 }
-inv <- function(perm) { o <- integer(length(perm)); o[perm] <- seq_along(perm); o }  # true -> est col
+mt_map  <- assign_map(mt_load); mt_ci  <- mt_map$comp_of_group
+mef_map <- assign_map(Zsub);    mef_ci <- mef_map$comp_of_group
 
-mt_perm <- inv(greedy_match(mt$A_hat))       # mt_perm[l] = multiTEMPTED column for true comp l
+# --- group separation: per-group recall (fraction of a group's subjects whose
+#     top component is the one matched to that group) ---
+mt_recall  <- vapply(1:r, function(l) mean(mt_map$pred[grp == l]  == mt_ci[l]),  numeric(1))
+mef_recall <- vapply(1:r, function(l) mean(mef_map$pred[grp == l] == mef_ci[l]), numeric(1))
 
-# MEFISTO: for each true component, the factor whose subject-scale best matches.
-# On fully cross-modality-unaligned data MEFISTO's factors are largely single-
-# modality (see the integration note below), so we match by best fit rather than
-# assume one integrated factor spans both modalities.
-mef_k <- sapply(1:r, function(l) which.max(abs(stats::cor(mdec$uscale, A_true[, l]))))
-
-# best |cor| over ALL factors' weights in a modality (robust to zero-weight cols)
-safe_cor_max <- function(Wmat, b) {
-  cs <- suppressWarnings(abs(stats::cor(Wmat, b)))
-  if (all(is.na(cs))) 0 else max(cs, na.rm = TRUE)
-}
-
-# true temporal curves on grids
-grid_mt  <- mt$time_Zeta[[1]]
+# --- functional estimation: temporal recovery, same matching ---
+grid_mt     <- mt$time_Zeta[[1]]
 xi_true_mt  <- sapply(1:r, function(l) sim$truth$xi[[l]](grid_mt))
 xi_true_mef <- sapply(1:r, function(l) sim$truth$xi[[l]](mdec$centers))
+mt_temporal  <- sapply(1:r, function(l) mean(sapply(1:M, function(m)
+                  abs(stats::cor(mt$Zeta_hat[[m]][, mt_ci[l]], xi_true_mt[, l])))))
+mef_temporal <- sapply(1:r, function(l) abs(stats::cor(mdec$shapes[, mef_ci[l]], xi_true_mef[, l])))
 
-metrics <- data.frame(
-  component = paste0("PC", 1:r),
-  shape     = names(temporal_shape_library)[1:r],
-  # feature loadings (avg over modalities); MEFISTO: best-matching factor per modality
-  mT_feature  = sapply(1:r, function(l) mean(sapply(1:M, function(m)
-                  abs(stats::cor(mt$B_hat[[m]][, mt_perm[l]], sim$truth$B[[m]][, l]))))),
-  MEF_feature = sapply(1:r, function(l) mean(sapply(1:M, function(m)
-                  safe_cor_max(Wm[[m]][rownames(sim$truth$B[[m]]), , drop = FALSE], sim$truth$B[[m]][, l])))),
-  # subject loadings
-  mT_subject  = sapply(1:r, function(l) abs(stats::cor(mt$A_hat[, mt_perm[l]], A_true[, l]))),
-  MEF_subject = sapply(1:r, function(l) abs(stats::cor(mdec$uscale[, mef_k[l]], A_true[, l]))),
-  # temporal function
-  mT_temporal  = sapply(1:r, function(l) mean(sapply(1:M, function(m)
-                   abs(stats::cor(mt$Zeta_hat[[m]][, mt_perm[l]], xi_true_mt[, l]))))),
-  MEF_temporal = sapply(1:r, function(l) abs(stats::cor(mdec$shapes[, mef_k[l]], xi_true_mef[, l]))),
+cat("\n== Recovery vs ground truth (temporal = |cor| with true curve;",
+    "recall = fraction of the group's subjects put on its component) ==\n")
+tab <- data.frame(
+  group        = paste0("group", 1:r),
+  shape        = names(temporal_shape_library)[1:r],
+  mT_temporal  = round(mt_temporal, 3),  MEF_temporal = round(mef_temporal, 3),
+  mT_recall    = round(mt_recall, 2),    MEF_recall   = round(mef_recall, 2),
   row.names = NULL)
-
-cat("\n== Recovery vs ground truth (absolute correlation; 1.000 = perfect) ==\n")
-print(cbind(metrics[, 1:2], round(metrics[, -(1:2)], 3)), row.names = FALSE)
-
-# integration: share of each MEFISTO factor's weight energy in its top modality
-energy   <- sapply(mods, function(v) colSums(Wm[[v]]^2)) # factors x M
-frac_top <- apply(energy, 1, function(e) max(e) / sum(e))
-cat(sprintf("\n-- MEFISTO integration: mean weight-energy share in each factor's top modality: %.2f (1/M = %.2f) --\n",
-            mean(frac_top), 1 / M))
-cat("   Near 1 means factors are single-modality: with no samples co-measured across\n")
-cat("   modalities (fully unaligned), MEFISTO cannot fuse them, whereas multiTEMPTED\n")
-cat("   links modalities through the shared subject loading regardless of timing.\n")
+print(tab, row.names = FALSE)
+cat(sprintf("\n  overall group-assignment accuracy:  multiTEMPTED %.2f | MEFISTO %.2f\n",
+            mt_map$accuracy, mef_map$accuracy))
 
 
 # ============================================================================
 # 4. PDF: temporal-function recovery of each method
 # ============================================================================
-unit <- function(v) { v <- v - mean(v); if (sqrt(sum(v^2)) > 0) v / sqrt(sum(v^2)) else v }
+unit  <- function(v) { v <- v - mean(v); if (sqrt(sum(v^2)) > 0) v / sqrt(sum(v^2)) else v }
 align <- function(est, ref) if (stats::cor(est, ref) < 0) -est else est
 fine  <- seq(pr$time_range[1], pr$time_range[2], length.out = 200)
 
@@ -282,17 +282,34 @@ grDevices::pdf("compare_synthetic.pdf", width = 3.2 * r, height = 3.4)
 op <- graphics::par(mfrow = c(1, r), mar = c(3.2, 3.2, 2.4, 1), mgp = c(1.9, 0.6, 0))
 for (l in 1:r) {
   tru  <- unit(sim$truth$xi[[l]](fine))
-  mtv  <- align(unit(mt$Zeta_hat[[1]][, mt_perm[l]]), unit(sim$truth$xi[[l]](grid_mt)))
-  mefv <- align(unit(mdec$shapes[, mef_k[l]]), unit(xi_true_mef[, l]))
+  mtv  <- align(unit(mt$Zeta_hat[[1]][, mt_ci[l]]), unit(sim$truth$xi[[l]](grid_mt)))
+  mefv <- align(unit(mdec$shapes[, mef_ci[l]]), unit(xi_true_mef[, l]))
   yl <- range(c(tru, mtv, mefv))
   plot(fine, tru, type = "l", lwd = 2.5, col = "black", ylim = yl,
        xlab = "time", ylab = "temporal loading (scaled)",
-       main = sprintf("PC%d: %s", l, metrics$shape[l]))
+       main = sprintf("PC%d: %s", l, tab$shape[l]))
   graphics::lines(grid_mt, mtv, lwd = 2, lty = 2, col = "#D55E00")
   graphics::lines(mdec$centers, mefv, lwd = 2, lty = 3, col = "#0072B2")
   if (l == 1) graphics::legend("topleft", c("true", "multiTEMPTED", "MEFISTO"),
                                lwd = 2, lty = c(1, 2, 3), col = c("black", "#D55E00", "#0072B2"),
                                bty = "n", cex = 0.85)
 }
+
+# --- final page: the recovery table also printed to the log ---
+graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
+tbl <- c(
+  sprintf("Block data: %d subjects in %d groups, %d modalities, sampling = '%s'",
+          pr$n, pr$r, pr$M, pr$sampling),
+  "",
+  "Recovery (temporal = |cor| with true curve; recall = fraction of a group's",
+  "subjects put on its component):",
+  utils::capture.output(print(tab, row.names = FALSE)),
+  "",
+  sprintf("overall group-assignment accuracy:  multiTEMPTED %.2f | MEFISTO %.2f",
+          mt_map$accuracy, mef_map$accuracy))
+graphics::plot.new()
+graphics::mtext("multiTEMPTED vs MEFISTO (log output)", side = 3, line = 0.5, font = 2)
+graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.8)
+
 graphics::par(op); grDevices::dev.off()
-cat("\n  temporal-recovery overlay written to compare_synthetic.pdf\n")
+cat("\n  temporal-recovery overlay + table written to compare_synthetic.pdf\n")

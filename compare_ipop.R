@@ -11,17 +11,15 @@
 # measured at 5 shared visits during an exercise challenge. All modalities are on
 # a log10 scale and share visits, so samples are naturally aligned across views.
 #
-# --- MEFISTO speed settings used here, and how to undo them -------------------
-# The MEFISTO step trains a per-subject Gaussian process and is the slow part
-# (~10 min). The knobs are set just below the library() call:
-#   MEF_MAXITER = 150      -> raise (e.g. 1000) for full convergence
-#   MEF_CONVERGENCE "fast" -> set "slow" for a stricter convergence criterion
-#   MEF_OPTIMISE_GP FALSE  -> the GP hyperparameter (lengthscale) optimisation is
-#                             DISABLED. This is not just for speed: on this machine
-#                             mofapy2's GP optimiser crashes with >= 3 views (iPOP
-#                             has 4). Setting it TRUE restores the full GP but is
-#                             expected to crash here; with it off the GP still
-#                             smooths the factors at its initial lengthscale.
+# --- MEFISTO speed settings, set in the knobs just below the library() call ---
+# The MEFISTO step trains a per-subject Gaussian process and is the slow part.
+#   MEF_MAXITER      -> more iterations = fuller convergence, slower
+#   MEF_CONVERGENCE  -> "fast" or "slow" (stricter) convergence criterion
+#   MEF_OPTIMISE_GP  -> TRUE tunes the GP lengthscale (MEFISTO at full capability);
+#                       it runs even on iPOP's 4 views but is considerably slower.
+#                       FALSE just fixes the lengthscale for a quicker fit.
+# For quick code-checking use MEF_MAXITER = 100, "fast", GP off; for the real
+# comparison use many iterations, "slow", and GP on.
 # Also: MEFISTO needs every subject at the same visit times, so we keep only
 # complete-visit subjects (applied to both methods); multiTEMPTED would not need
 # this.
@@ -177,8 +175,39 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   cat("\n  READ WITH CARE. The two methods parameterise time differently (per-modality\n")
   cat("  loadings vs one shared factor) and preprocess differently (rank-1 mean removal\n")
   cat("  vs per-feature centering), so they are NOT expected to agree closely -- low\n")
-  cat("  agreement reflects different models, not one being 'wrong'. MEFISTO here also\n")
-  cat("  runs under environment constraints (GP hyperparameter optimisation disabled;\n")
-  cat("  complete-visit subjects only; bounded iterations), so treat its numbers as a\n")
-  cat("  conservative lower bound rather than a definitive MEFISTO analysis.\n")
+  cat("  agreement reflects different models, not one being 'wrong'.\n")
+
+  # ---- (iv) PDF: first two subject PCs, both methods, coloured by sex --------
+  # multiTEMPTED: subject loadings A_hat[,1:2]. MEFISTO: per-subject mean of
+  # factors 1:2. Subjects are aligned (common set); colour by sex.
+  col_sex <- ifelse(sex_v == 1, "#0072B2", "#D55E00")   # male = blue, female = orange
+  grDevices::pdf("compare_ipop.pdf", width = 9, height = 4.6)
+  op <- graphics::par(mfrow = c(1, 2), mar = c(4, 4, 3, 1), mgp = c(2.3, 0.8, 0))
+  plot(A_mt[, 1], A_mt[, 2], col = col_sex, pch = 19,
+       xlab = "PC1", ylab = "PC2", main = "multiTEMPTED subject loadings")
+  graphics::legend("topright", c("male", "female"), col = c("#0072B2", "#D55E00"),
+                   pch = 19, bty = "n")
+  plot(Z_mef[, 1], Z_mef[, 2], col = col_sex, pch = 19,
+       xlab = "Factor 1", ylab = "Factor 2", main = "MEFISTO subject factors")
+
+  # --- final page: the tables also printed to the log ---
+  graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
+  tbl <- c(
+    "Feature-loading agreement (best |cor| between the methods' loadings):",
+    utils::capture.output(print(round(agree, 2))),
+    "",
+    "Subject-embedding agreement (best |cor| of each multiTEMPTED score with a MEFISTO factor):",
+    utils::capture.output(print(round(stats::setNames(emb_cor, paste0("PC", 1:r)), 2))),
+    "",
+    "Sex association |cor(score, sex)| per component (max = best sex-separating axis):",
+    sprintf("  multiTEMPTED: %s   (max %.2f)",
+            paste(sprintf("PC%d=%.2f", 1:r, sex_mt), collapse = "  "), max(sex_mt)),
+    sprintf("  MEFISTO:      %s   (max %.2f)",
+            paste(sprintf("F%d=%.2f", 1:r, sex_mef), collapse = "  "), max(sex_mef)))
+  graphics::plot.new()
+  graphics::mtext("iPOP: multiTEMPTED vs MEFISTO (log output)", side = 3, line = 0.5, font = 2)
+  graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.75)
+
+  graphics::par(op); grDevices::dev.off()
+  cat("\n  first-two-PC scatter (coloured by sex) + tables written to compare_ipop.pdf\n")
 }
