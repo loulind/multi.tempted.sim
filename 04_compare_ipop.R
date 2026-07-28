@@ -30,8 +30,8 @@ library(multi.tempted)
 
 # --- MEFISTO speed / capability knobs (see the header note) -------------------
 MEF_MAXITER     <- 1000      # iterations; raise for a fuller fit
-MEF_CONVERGENCE <- "slow"   # "fast" or "slow"
-MEF_OPTIMISE_GP <- TRUE    # TRUE = full GP lengthscale tuning
+MEF_CONVERGENCE <- "fast"   # "fast" or "slow"
+MEF_OPTIMISE_GP <- FALSE    # TRUE = full GP lengthscale tuning
 
 # ---- load & format iPOP ----------------------------------------------------
 ip   <- multi.tempted::ipop
@@ -121,8 +121,9 @@ run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
 
   obj <- MOFA2::prepare_mofa(obj, data_options = dopt, model_options = mopt,
                              training_options = topt, mefisto_options = eopt)
-  MOFA2::run_mofa(obj, outfile = file.path(tempdir(), "mefisto_ipop.hdf5"),
-                  use_basilisk = TRUE, save_data = TRUE)
+  f <- file.path(tempdir(), "mefisto_ipop.hdf5")
+  MOFA2::run_mofa(obj, outfile = f, use_basilisk = TRUE, save_data = TRUE)
+  MOFA2::load_model(f, remove_inactive_factors = FALSE)   # keep all r factors (MEFISTO may drop 'inactive' ones)
 }
 
 if (!requireNamespace("MOFA2", quietly = TRUE)) {

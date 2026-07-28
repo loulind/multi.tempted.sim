@@ -95,7 +95,9 @@ run_mefisto <- function(ft, tp, sid, n_factors) {
   if (!MEF_OPTIMISE_GP) eo$start_opt <- eo$opt_freq <- as.integer(MEF_MAXITER + 1L)
   obj <- MOFA2::prepare_mofa(obj, data_options = MOFA2::get_default_data_options(obj),
                              model_options = mo, training_options = to, mefisto_options = eo)
-  MOFA2::run_mofa(obj, outfile = file.path(tempdir(), "mef.hdf5"), use_basilisk = TRUE, save_data = TRUE)
+  f <- file.path(tempdir(), "mef.hdf5")
+  MOFA2::run_mofa(obj, outfile = f, use_basilisk = TRUE, save_data = TRUE)
+  MOFA2::load_model(f, remove_inactive_factors = FALSE)   # keep all r factors (MEFISTO may drop 'inactive' ones)
 }
 mefisto_decompose <- function(model, r, n_bins = 12) {
   Z <- do.call(rbind, MOFA2::get_factors(model, groups = "all")); sm <- MOFA2::samples_metadata(model)
@@ -108,6 +110,7 @@ mefisto_decompose <- function(model, r, n_bins = 12) {
     for (si in seq_along(subs)) { sel <- gv == subs[si]; for (b in unique(bin[sel])) Mm[si, b] <- mean(Z[sel & bin == b, k]) }
     keep <- colSums(!is.na(Mm)) > 0; Mk <- Mm[, keep, drop = FALSE]
     for (b in seq_len(ncol(Mk))) { na <- is.na(Mk[, b]); if (any(na)) Mk[na, b] <- mean(Mk[!na, b]) }
+    if (ncol(Mk) == 0 || stats::sd(as.vector(Mk)) < 1e-9) next   # inactive factor: leave zeros
     sv <- svd(Mk, nu = 1, nv = 1); shp[keep, k] <- sv$v[, 1]; usc[, k] <- sv$u[, 1] }
   list(centers = centers, shapes = shp, uscale = usc)
 }
@@ -139,10 +142,11 @@ for (s in 1:N_SEEDS) {
   mmt <- misclass(mt$A_hat, grp, R); mmf <- misclass(Zsub, grp, R)
   # function estimation (shared curve per component)
   gmt <- mt$time_Zeta[[1]]; gmf <- mdec$centers
+  .acor <- function(x, y) { v <- suppressWarnings(abs(stats::cor(x, y))); if (is.na(v)) 0 else v }
   mt_fe <- mean(vapply(1:R, function(l) mean(vapply(1:M, function(m)
-             abs(stats::cor(mt$Zeta_hat[[m]][, mmt$comp_of_group[l]], sim$truth$xi[[l]](gmt))), numeric(1))), numeric(1)))
+             .acor(mt$Zeta_hat[[m]][, mmt$comp_of_group[l]], sim$truth$xi[[l]](gmt)), numeric(1))), numeric(1)))
   mef_fe <- mean(vapply(1:R, function(l)
-             abs(stats::cor(mdec$shapes[, mmf$comp_of_group[l]], sim$truth$xi[[l]](gmf))), numeric(1)))
+             .acor(mdec$shapes[, mmf$comp_of_group[l]], sim$truth$xi[[l]](gmf)), numeric(1)))
 
   res[[s]] <- data.frame(seed = s, mt_time = t_mt, mef_time = t_mef,
                          mt_miscl = mmt$err, mef_miscl = mmf$err, mt_fe = mt_fe, mef_fe = mef_fe)

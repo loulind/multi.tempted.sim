@@ -26,7 +26,7 @@
 
 library(multi.tempted)
 
-N_SEEDS         <- 3
+N_SEEDS         <- 1
 MEF_MAXITER     <- 1000
 MEF_CONVERGENCE <- "fast"
 MEF_OPTIMISE_GP <- FALSE
@@ -102,7 +102,9 @@ run_mefisto <- function(ft, tp, sid, n_factors) {
   if (!MEF_OPTIMISE_GP) eo$start_opt <- eo$opt_freq <- as.integer(MEF_MAXITER + 1L)
   obj <- MOFA2::prepare_mofa(obj, data_options = MOFA2::get_default_data_options(obj),
                              model_options = mo, training_options = to, mefisto_options = eo)
-  MOFA2::run_mofa(obj, outfile = file.path(tempdir(), "mef.hdf5"), use_basilisk = TRUE, save_data = TRUE)
+  f <- file.path(tempdir(), "mef.hdf5")
+  MOFA2::run_mofa(obj, outfile = f, use_basilisk = TRUE, save_data = TRUE)
+  MOFA2::load_model(f, remove_inactive_factors = FALSE)   # keep all r factors (MEFISTO may drop 'inactive' ones)
 }
 # per-factor (subject-scale, temporal-shape) via SVD of the subject x time-bin matrix
 mefisto_decompose <- function(model, r, n_bins = 12) {
@@ -116,6 +118,7 @@ mefisto_decompose <- function(model, r, n_bins = 12) {
     for (si in seq_along(subs)) { sel <- gv == subs[si]; for (b in unique(bin[sel])) Mm[si, b] <- mean(Z[sel & bin == b, k]) }
     keep <- colSums(!is.na(Mm)) > 0; Mk <- Mm[, keep, drop = FALSE]
     for (b in seq_len(ncol(Mk))) { na <- is.na(Mk[, b]); if (any(na)) Mk[na, b] <- mean(Mk[!na, b]) }
+    if (ncol(Mk) == 0 || stats::sd(as.vector(Mk)) < 1e-9) next   # inactive factor: leave zeros
     sv <- svd(Mk, nu = 1, nv = 1); shapes[keep, k] <- sv$v[, 1]; uscale[, k] <- sv$u[, 1]
   }
   list(centers = centers, shapes = shapes, uscale = uscale)
