@@ -1,0 +1,36 @@
+multi.tempted.sim
+================
+
+Simulations comparing **multiTEMPTED** to **MEFISTO** (MOFA2). Each
+script is self-contained, runs top-to-bottom, prints a summary, and
+writes a PDF (figure + a table page) into `output/`.
+
+## Scripts (storyline order)
+
+| Script | Setting | Shows |
+|----|----|----|
+| `01_validate.R` | multiTEMPTED only | recovers the truth under the correct model |
+| `02_compare_unaligned.R` | modality-specific curves, **unaligned** time, a few seeds | MEFISTO is slow and cannot estimate modality-specific dynamics |
+| `03_compare_aligned.R` | shared curves, **aligned** time, block groups, many seeds | even on MEFISTO’s favorable turf, multiTEMPTED classifies subjects and estimates curves better |
+| `04_compare_ipop.R` | real iPOP omics | both subject embeddings separate by sex |
+
+## Run
+
+``` r
+source("01_validate.R")          # fast
+source("02_compare_unaligned.R") # slow (MEFISTO on unaligned data)
+source("03_compare_aligned.R")   # scale N_SEEDS at the top
+source("04_compare_ipop.R")      # real data; MEFISTO is the slow step
+```
+
+PDFs land in `output/`. Requires the `multi.tempted` and `MOFA2`
+packages (`BiocManager::install("MOFA2")` also pulls `basilisk`, which
+supplies the Python backend — no manual setup).
+
+## MEFISTO settings (top of each comparison script)
+
+`MEF_OPTIMISE_GP`, `MEF_MAXITER`, `MEF_CONVERGENCE`, and (in 02/03)
+`N_SEEDS` trade speed for fairness. For quick checks use
+`MEF_OPTIMISE_GP <- FALSE`, `MEF_MAXITER <- 100`, `"fast"`; for the
+paper’s fair comparison turn GP optimisation on, raise the iterations,
+and set `"slow"`. multiTEMPTED’s cost is unaffected.
