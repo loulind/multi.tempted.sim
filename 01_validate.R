@@ -421,7 +421,9 @@ cat(sprintf("\n  final accumulated R^2 per modality: %s\n",
 cat(sprintf("  min subject-loading correlation across components: %.4f\n",
             min(report$per_component$cor_A)))
 
-# save a visual overlay next to the script
-out_pdf <- "validate_synthetic.pdf"
+# save a visual overlay into output/
+dir.create("output", showWarnings = FALSE)
+out_pdf <- file.path("output", "01_validate.pdf")
+.dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
 plot_temporal_recovery(sim, fit, report, file = out_pdf)
-cat(sprintf("  temporal-loading overlay written to %s\n", out_pdf))
+cat(sprintf("  temporal-loading overlay written to %s\n", normalizePath(out_pdf, mustWork = FALSE)))

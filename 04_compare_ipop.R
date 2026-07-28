@@ -181,7 +181,10 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   # multiTEMPTED: subject loadings A_hat[,1:2]. MEFISTO: per-subject mean of
   # factors 1:2. Subjects are aligned (common set); colour by sex.
   col_sex <- ifelse(sex_v == 1, "#0072B2", "#D55E00")   # male = blue, female = orange
-  grDevices::pdf("compare_ipop.pdf", width = 9, height = 4.6)
+  dir.create("output", showWarnings = FALSE)
+  .pdf <- file.path("output", "04_compare_ipop.pdf")
+  .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
+  grDevices::pdf(.pdf, width = 9, height = 4.6)
   op <- graphics::par(mfrow = c(1, 2), mar = c(4, 4, 3, 1), mgp = c(2.3, 0.8, 0))
   plot(A_mt[, 1], A_mt[, 2], col = col_sex, pch = 19,
        xlab = "PC1", ylab = "PC2", main = "multiTEMPTED subject loadings")
@@ -209,5 +212,6 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.75)
 
   graphics::par(op); grDevices::dev.off()
-  cat("\n  first-two-PC scatter (coloured by sex) + tables written to compare_ipop.pdf\n")
+  cat(sprintf("\n  first-two-PC scatter (coloured by sex) + tables written to %s\n",
+              normalizePath(.pdf, mustWork = FALSE)))
 }
