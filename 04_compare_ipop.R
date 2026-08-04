@@ -30,8 +30,8 @@ library(multi.tempted)
 
 # --- MEFISTO speed / capability knobs (see the header note) -------------------
 MEF_MAXITER     <- 1000      # iterations; raise for a fuller fit
-MEF_CONVERGENCE <- "fast"   # "fast" or "slow"
-MEF_OPTIMISE_GP <- FALSE    # TRUE = full GP lengthscale tuning
+MEF_CONVERGENCE <- "slow"   # "fast" or "slow"
+MEF_OPTIMISE_GP <- TRUE    # TRUE = full GP lengthscale tuning
 
 # ---- load & format iPOP ----------------------------------------------------
 ip   <- multi.tempted::ipop

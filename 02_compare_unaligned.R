@@ -27,9 +27,9 @@
 library(multi.tempted)
 
 N_SEEDS         <- 10
-MEF_MAXITER     <- 100
-MEF_CONVERGENCE <- "fast"
-MEF_OPTIMISE_GP <- FALSE
+MEF_MAXITER     <- 1000
+MEF_CONVERGENCE <- "slow"
+MEF_OPTIMISE_GP <- TRUE
 
 # fixed data dimensions (change to taste; see README)
 N <- 12; M <- 3; P <- 24; R <- 3; NT <- 8; NOISE <- 0.1; LAMBDA <- c(8, 6, 4)
