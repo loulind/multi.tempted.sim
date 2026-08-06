@@ -1,28 +1,25 @@
 # ============================================================================
-# simulation.R
+# 01_validate.R   (storyline point 1)
 #
-# A fully synthetic simulation analysis for multiTEMPTED. 
-# Data are gen'd from the *exact* model assumed in the method, to see if 
-# the method can recover the original components.
+# Validate multiTEMPTED: data are generated from the *exact* model the method
+# assumes, and we check that it recovers the planted components -- and how that
+# recovery degrades as noise grows.
 #
 # Model: For modality m = 1..M, subject i = 1..n, feature j = 1..p_m, and time
 # t in T_mi (a subset of the continuous interval T):
 #
 #     Y_mijt = sum_{l=1}^r  lambda_ml * a_il * b_mjl * xi_ml(t)  +  Z_mijt
 #
-# ...with identifiability constraints, for every l and m,
+# ...with identifiability constraints (sum_i a_il^2 = sum_j b_mjl^2 =
+# integral_T xi_ml(t)^2 dt = 1) and error Z_mijt ~ N(0, noise_sd^2). The subject
+# loadings a_l are shared across modalities; b_ml, xi_ml, lambda_ml are
+# modality-specific.
 #
-#     sum_i a_il^2 = 1,   sum_j b_mjl^2 = 1,   integral_T xi_ml(t)^2 dt = 1,
-#
-# ....and error Z_mijt ~ N(0, noise_sd^2). The subject loadings a_l are
-# shared across modalities; b_ml, xi_ml, and lambda_ml are modality specific.
-#
-# The generator returns `featuretables`, `timepoints`, and `subjectID` in
-# exactly the shape `multitempted_all()` expects, plus the original
-# components under `$truth` so recovery can be checked.
-#
-# Everything is driven by generate_multitempted_data(); see its arguments to
-# modify components.
+# The run at the bottom is a NOISE STUDY: several noise levels x many seeds
+# (default 5 x 20 = 100 runs). It reports recovery accuracy (|cor| of the
+# estimated subject / feature / temporal loadings with truth) per noise level
+# and writes output/01_validate.pdf: a recovery-vs-noise plot, example recovered
+# curves, and a summary table.
 # ============================================================================
 
 # pak::pkg_install("loulind/multi.tempted")
@@ -353,77 +350,93 @@ plot_temporal_recovery <- function(sim, fit, report = NULL, file = NULL) {
       graphics::legend("topleft", c("true", "estimated"), lwd = 2,
                        lty = c(1, 2), col = c("black", "red"), bty = "n", cex = 0.8)
   }
-
-  # --- final page: the tables also printed to the log ---
-  graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
-  tbl <- c(
-    "Planted temporal shape per (modality, component):",
-    utils::capture.output(print(sim$truth$shape_names, quote = FALSE)),
-    "",
-    "Recovery vs ground truth (absolute correlation; 1.000 = perfect):",
-    utils::capture.output(print(report$per_component, row.names = FALSE)),
-    "",
-    sprintf("final accumulated R^2 per modality: %s",
-            paste(sprintf("%.3f", report$final_r2), collapse = ", ")),
-    sprintf("min subject-loading correlation across components: %.4f",
-            min(report$per_component$cor_A)))
-  graphics::plot.new()
-  graphics::mtext("multiTEMPTED recovery (log output)", side = 3, line = 0.5, font = 2)
-  graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.85)
 }
 
 
-# ------ RUN THE SIMULATION ---------
+# ============================================================================
+# NOISE STUDY: how well multiTEMPTED recovers the truth as noise increases.
+# For each of several noise levels we run many random seeds and record the
+# recovery accuracy (|cor| of the estimated subject / feature / temporal
+# loadings with the truth). Fixing the seed and only scaling noise_sd keeps the
+# planted structure identical across noise levels -- a controlled experiment.
+# ============================================================================
 
-cat("== Generating synthetic multiTEMPTED data ==\n")
-sim <- generate_multitempted_data(r = 3, M = 3, seed = 1)
-pr <- sim$params
-cat(sprintf("  M=%d modalities, n=%d subjects, p=%s features, %s timepoints/subj\n",
-            pr$M, pr$n, paste(pr$p, collapse = "/"),
-            paste(pr$n_timepoints, collapse = "/")))
-cat(sprintf("  noise_sd=%s, sampling=%s (times drawn uniformly from T per subject)\n",
-            paste(pr$noise_sd, collapse = "/"), pr$sampling))
+NOISE_LEVELS   <- c(0.1, 0.5, 1.0, 2.0, 4.0)   # 5 increasing noise SDs
+N_SEEDS        <- 20                           # seeds per level (5 x 20 = 100 runs)
+smooth_penalty <- 1e-4                         # RKHS penalty suited to unaligned sampling
 
-cat("\n-- temporal shape planted in each (modality, component) slot --\n")
-print(sim$truth$shape_names, quote = FALSE)
+cat(sprintf("== multiTEMPTED validation: %d noise levels x %d seeds = %d runs ==\n",
+            length(NOISE_LEVELS), N_SEEDS, length(NOISE_LEVELS) * N_SEEDS))
 
-cat("\n-- featuretables format (what multitempted_all consumes) --\n")
-ft1 <- sim$featuretables[[1]]
-cat(sprintf("  featuretables[[1]] '%s': %d samples x %d features\n",
-            pr$modality_names[1], nrow(ft1), ncol(ft1)))
-cat(sprintf("  timepoints[[1]] length %d, subjectID[[1]] length %d (%d unique)\n",
-            length(sim$timepoints[[1]]), length(sim$subjectID[[1]]),
-            length(unique(sim$subjectID[[1]]))))
+res <- vector("list", length(NOISE_LEVELS) * N_SEEDS); i <- 0
+low <- NULL                                    # keep the cleanest run for the overlay figure
+for (nl in NOISE_LEVELS) {
+  for (s in 1:N_SEEDS) {
+    sim <- generate_multitempted_data(r = 3, M = 3, noise_sd = nl, seed = s)
+    fit <- suppressMessages(multitempted_all(
+      sim$featuretables, sim$timepoints, sim$subjectID,
+      transforms = "none", do_ratio = FALSE, centralize = FALSE,
+      smooth = smooth_penalty, r = sim$params$r))
+    rp <- evaluate_recovery(sim, fit)
+    i <- i + 1
+    res[[i]] <- data.frame(noise = nl, seed = s,
+                           subject  = mean(rp$per_component$cor_A),
+                           feature  = mean(rp$per_component$cor_B_mean),
+                           temporal = mean(rp$per_component$cor_Z_mean))
+    if (nl == NOISE_LEVELS[1] && s == 1) low <- list(sim = sim, fit = fit, report = rp)
+  }
+  cat(sprintf("  noise_sd=%.2f done (%d seeds)\n", nl, N_SEEDS))
+}
+R_all <- do.call(rbind, res)
 
-# RKHS smoothing penalty. The package default (1e-8) is a near-zero ridge. That
-# is fine when every subject shares the same handful of timepoints. Under
-# uniform sampling, every time value is distinct, so a 1e-8 penalty causes
-# overfitting rather than a smooth fit. Chose smooth=1e-4 which maximized 
-# mean accumulated R^2.
-smooth_penalty <- 1e-4
+# summarise per noise level (mean over seeds, with sd)
+mns <- function(col) tapply(R_all[[col]], R_all$noise, mean)
+sds <- function(col) tapply(R_all[[col]], R_all$noise, stats::sd)
+summ <- data.frame(
+  noise_sd = NOISE_LEVELS,
+  subject  = sprintf("%.3f (+/-%.3f)", mns("subject"),  sds("subject")),
+  feature  = sprintf("%.3f (+/-%.3f)", mns("feature"),  sds("feature")),
+  temporal = sprintf("%.3f (+/-%.3f)", mns("temporal"), sds("temporal")),
+  row.names = NULL)
+cat("\n== recovery accuracy (|cor| with truth) by noise level, mean +/- sd over seeds ==\n")
+print(summ, row.names = FALSE)
 
-cat("\n== Fitting multitempted_all (centralize=FALSE: data ARE the model) ==\n")
-fit <- multitempted_all(
-  featuretables = sim$featuretables,
-  timepoints    = sim$timepoints,
-  subjectID     = sim$subjectID,
-  transforms    = "none", # already-scaled real values
-  do_ratio      = FALSE, # not counts
-  centralize    = FALSE, # no separate mean term in the model
-  smooth        = smooth_penalty,
-  r             = pr$r)
 
-cat("\n== Recovery (absolute correlations; 1.000 = perfect) ==\n")
-report <- evaluate_recovery(sim, fit)
-print(report$per_component, row.names = FALSE)
-cat(sprintf("\n  final accumulated R^2 per modality: %s\n",
-            paste(sprintf("%.3f", report$final_r2), collapse = ", ")))
-cat(sprintf("  min subject-loading correlation across components: %.4f\n",
-            min(report$per_component$cor_A)))
-
-# save a visual overlay into output/
+# ------ PDF: recovery-vs-noise plot + example overlay + summary table ------
 dir.create("output", showWarnings = FALSE)
 out_pdf <- file.path("output", "01_validate.pdf")
 .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
-plot_temporal_recovery(sim, fit, report, file = out_pdf)
-cat(sprintf("  temporal-loading overlay written to %s\n", normalizePath(out_pdf, mustWork = FALSE)))
+grDevices::pdf(out_pdf, width = 7.5, height = 6.5)
+
+## page 1: recovery accuracy vs noise (the requested plot)
+cols <- c(subject = "#0072B2", feature = "#D55E00", temporal = "#009E73")
+graphics::par(mfrow = c(1, 1), mar = c(4.2, 4.4, 3, 1), mgp = c(2.5, 0.8, 0))
+plot(NA, xlim = range(NOISE_LEVELS), ylim = c(0, 1), log = "x",
+     xlab = "noise SD (log scale)", ylab = "recovery accuracy  (|cor| with truth)",
+     main = "multiTEMPTED recovery decreases with noise")
+for (nm in names(cols)) {
+  m <- mns(nm); sdv <- sds(nm)
+  graphics::arrows(NOISE_LEVELS, pmax(0, m - sdv), NOISE_LEVELS, pmin(1, m + sdv),
+                   angle = 90, code = 3, length = 0.03, col = cols[nm])
+  graphics::lines(NOISE_LEVELS, m, type = "b", pch = 19, lwd = 2, col = cols[nm])
+}
+graphics::legend("bottomleft", names(cols), col = cols, lwd = 2, pch = 19, bty = "n",
+                 title = "loading")
+graphics::mtext(sprintf("%d seeds per noise level", N_SEEDS), side = 3, line = 0.2, cex = 0.85)
+
+## page 2: example recovered curves at the lowest noise level (validation visual)
+plot_temporal_recovery(low$sim, low$fit, low$report, file = NULL)
+
+## page 3: summary table
+graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
+tbl <- c(sprintf("multiTEMPTED validation: m x f curves, unaligned; %d noise levels x %d seeds",
+                 length(NOISE_LEVELS), N_SEEDS),
+         "", "Recovery accuracy (|cor| with truth), mean +/- sd over seeds:",
+         utils::capture.output(print(summ, row.names = FALSE)))
+graphics::plot.new()
+graphics::mtext("multiTEMPTED validation (log output)", side = 3, line = 0.5, font = 2)
+graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.9)
+
+grDevices::dev.off()
+cat(sprintf("\n  recovery-vs-noise plot + overlay + table written to %s\n",
+            normalizePath(out_pdf, mustWork = FALSE)))
