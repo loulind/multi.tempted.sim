@@ -4,8 +4,9 @@
 # Setting that FAVORS MEFISTO -- yet multiTEMPTED still wins:
 #   * 1 x f temporal functions: each component uses the SAME curve in every
 #     modality (dynamics identical across modalities -> MEFISTO can represent it).
-#   * well-aligned timepoints: every subject and modality shares one time grid,
-#     so all modalities are co-measured (MEFISTO's fast, natural case).
+#   * sampling times set by SAMPLING (see below); the default "ALIGNED" gives
+#     every subject and modality one shared time grid, so all modalities are
+#     co-measured (MEFISTO's natural case).
 #   * block structure: subjects split into r groups (one per component) with a
 #     matching feature subset per modality; component l is "on" only for group-l
 #     subjects and subset-l features.
@@ -18,22 +19,41 @@
 # Expected story: even on MEFISTO's home turf, multiTEMPTED classifies subjects
 # and estimates the curves at least as well, usually better.
 #
+# --- sampling design -------------------------------------------------------
+#   SAMPLING "ALIGNED"   -> every subject and modality sampled at exactly the
+#                           same NT grid times (the original behaviour).
+#            "CLUSTERED" -> samples land in a small cloud around the nominal grid
+#                           times (sd = TIME_JITTER), drawn independently for each
+#                           subject AND modality, so nothing is exactly co-measured
+#                           but the visit schedule is still recognisable.
+#            "UNALIGNED" -> every subject x modality draws its own random times,
+#                           exactly as in 02_compare_unaligned.R.
+#   NOTE: this drives MEFISTO's cost far more than any other knob. Its GP step
+#   optimises a group x group covariance only when groups share covariate values,
+#   so "ALIGNED" is by far the most expensive of the three (measured: a single GP
+#   hyperparameter update takes ~1 h aligned vs ~10 min for 02's unaligned data).
+#
 # --- run / MEFISTO settings (efficient here; make them fair for the real run) --
 #   N_SEEDS 100     -> paper scale; drop for a quick check
 #   MEF_MAXITER 100 -> raise (e.g. 1000) for full convergence
 #   MEF_CONVERGENCE -> "fast" (checking) or "slow" (fair)
 #   MEF_OPTIMISE_GP -> FALSE (checking; faster). TRUE tunes the GP lengthscale
-#                      (MEFISTO's fair setting; slower but tractable when aligned).
+#                      (MEFISTO's fair setting; see the cost note above).
 # ============================================================================
 
 library(multi.tempted)
+
+SAMPLING        <- "CLUSTERED"          # "ALIGNED" | "CLUSTERED" | "UNALIGNED"
+TIME_JITTER     <- 0.02               # sd of the visit-time noise when CLUSTERED
 
 N_SEEDS         <- 100
 MEF_MAXITER     <- 1000
 MEF_CONVERGENCE <- "slow"
 MEF_OPTIMISE_GP <- TRUE
 
-N <- 15; M <- 3; P <- 24; R <- 3; NT <- 8; NOISE <- 0.1; LAMBDA <- c(8, 6, 4); OFFGROUP <- 0.05
+N <- 15; M <- 3; P <- 24; R <- 3; NT <- 8; NOISE <- 1.0; LAMBDA <- c(8, 6, 4); OFFGROUP <- 0.05
+
+stopifnot(SAMPLING %in% c("ALIGNED", "CLUSTERED", "UNALIGNED"))
 
 
 # ============================================================================
@@ -60,15 +80,23 @@ gen_block <- function(seed) {
   Lambda <- matrix(LAMBDA[1:R], M, R, byrow = TRUE)
   fine <- seq(0, 1, length.out = 2001)
   xi <- lapply(1:R, function(l) { nrm <- sqrt(.trapz(fine, shapes[[l]](fine)^2)); function(t) shapes[[l]](t) / nrm })
-  grid <- seq(0, 1, length.out = NT)                                # ALIGNED grid, shared by all
+  grid <- seq(0, 1, length.out = NT)                                # nominal visit schedule
+  # Sampling times, drawn per (modality, subject). CLUSTERED jitter is reflected
+  # at 0 and 1 rather than clamped, to avoid piling samples up on the two
+  # endpoints (which would re-align them across subjects and modalities).
+  .reflect01 <- function(u) { u <- abs(u); 1 - abs(1 - u) }
   ft <- tp <- sid <- vector("list", M)
   for (m in 1:M) {
     per <- vector("list", N); tv <- numeric(0); sv <- character(0)
     for (i in 1:N) {
-      Xi <- vapply(1:R, function(l) xi[[l]](grid), numeric(NT))
+      ts <- switch(SAMPLING,
+                   ALIGNED   = grid,
+                   CLUSTERED = sort(.reflect01(grid + stats::rnorm(NT, sd = TIME_JITTER))),
+                   UNALIGNED = sort(stats::runif(NT, 0, 1)))
+      Xi <- vapply(1:R, function(l) xi[[l]](ts), numeric(NT))       # truth at the ACTUAL times
       per[[i]] <- t(B[[m]] %*% (t(Xi) * (Lambda[m, ] * A[i, ])) +
-                    matrix(stats::rnorm(P * NT, sd = NOISE), P))
-      tv <- c(tv, grid); sv <- c(sv, rep(subj[i], NT))
+                      matrix(stats::rnorm(P * NT, sd = NOISE), P))
+      tv <- c(tv, ts); sv <- c(sv, rep(subj[i], NT))
     }
     x <- do.call(rbind, per); colnames(x) <- rownames(B[[m]]); ft[[m]] <- x; tp[[m]] <- tv; sid[[m]] <- sv
   }
@@ -128,26 +156,27 @@ misclass <- function(load, grp, r) {
 # run over seeds
 # ============================================================================
 if (!requireNamespace("MOFA2", quietly = TRUE)) stop("Install MOFA2: BiocManager::install('MOFA2')")
-cat(sprintf("== exp2: 1 x f (shared) curves, aligned, block structure; %d seeds ==\n", N_SEEDS))
+cat(sprintf("== exp2: 1 x f (shared) curves, %s sampling, block structure; %d seeds ==\n",
+            tolower(SAMPLING), N_SEEDS))
 
 res <- vector("list", N_SEEDS)
 for (s in 1:N_SEEDS) {
   sim <- gen_block(s); grp <- sim$truth$subj_group
   t_mt <- system.time(mt <- multitempted_all(sim$featuretables, sim$timepoints, sim$subjectID,
-             transforms = "none", do_ratio = FALSE, centralize = FALSE, smooth = 1e-4, r = R))[["elapsed"]]
+                                             transforms = "none", do_ratio = FALSE, centralize = FALSE, smooth = 1e-4, r = R))[["elapsed"]]
   t_mef <- system.time(mef <- run_mefisto(sim$featuretables, sim$timepoints, sim$subjectID, n_factors = R))[["elapsed"]]
   mdec <- mefisto_decompose(mef, R)
   Zsub <- t(sapply(MOFA2::get_factors(mef, groups = "all"), colMeans))[rownames(mt$A_hat), , drop = FALSE]
-
+  
   mmt <- misclass(mt$A_hat, grp, R); mmf <- misclass(Zsub, grp, R)
   # function estimation (shared curve per component)
   gmt <- mt$time_Zeta[[1]]; gmf <- mdec$centers
   .acor <- function(x, y) { v <- suppressWarnings(abs(stats::cor(x, y))); if (is.na(v)) 0 else v }
   mt_fe <- mean(vapply(1:R, function(l) mean(vapply(1:M, function(m)
-             .acor(mt$Zeta_hat[[m]][, mmt$comp_of_group[l]], sim$truth$xi[[l]](gmt)), numeric(1))), numeric(1)))
+    .acor(mt$Zeta_hat[[m]][, mmt$comp_of_group[l]], sim$truth$xi[[l]](gmt)), numeric(1))), numeric(1)))
   mef_fe <- mean(vapply(1:R, function(l)
-             .acor(mdec$shapes[, mmf$comp_of_group[l]], sim$truth$xi[[l]](gmf)), numeric(1)))
-
+    .acor(mdec$shapes[, mmf$comp_of_group[l]], sim$truth$xi[[l]](gmf)), numeric(1)))
+  
   res[[s]] <- data.frame(seed = s, mt_time = t_mt, mef_time = t_mef,
                          mt_miscl = mmt$err, mef_miscl = mmf$err, mt_fe = mt_fe, mef_fe = mef_fe)
   if (s %% 10 == 0 || s <= 3)
@@ -182,8 +211,10 @@ boxplot(list(multiTEMPTED = R_all$mt_fe, MEFISTO = R_all$mef_fe), col = cols,
         ylab = "function estimation |cor|", main = "temporal curve recovery", ylim = c(min(R_all$mef_fe, 0.8), 1))
 # table page
 graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
-tbl <- c(sprintf("exp2: 1 x f shared curves, aligned, block structure; %d seeds (N=%d, M=%d, p=%d, r=%d)",
+tbl <- c(sprintf("exp2: 1 x f shared curves, block structure; %d seeds (N=%d, M=%d, p=%d, r=%d)",
                  N_SEEDS, N, M, P, R),
+         sprintf("sampling: %s%s", SAMPLING,
+                 if (SAMPLING == "CLUSTERED") sprintf(" (time jitter sd=%g)", TIME_JITTER) else ""),
          sprintf("MEFISTO: maxiter=%d, %s, GP-opt=%s", MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP), "",
          "Summary over seeds:", utils::capture.output(print(summ, row.names = FALSE)))
 graphics::plot.new(); graphics::mtext("exp2: misclassification & function estimation (log output)", side = 3, line = 0.5, font = 2)
