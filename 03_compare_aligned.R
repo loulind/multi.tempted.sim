@@ -33,6 +33,14 @@
 #   so "ALIGNED" is by far the most expensive of the three (measured: a single GP
 #   hyperparameter update takes ~1 h aligned vs ~10 min for 02's unaligned data).
 #
+# --- checkpointing ---------------------------------------------------------
+#   Long runs are resumable. Finished seeds are appended to output/03_sims.csv
+#   every CKPT_EVERY seeds; re-running the script reads that file and picks up
+#   at the first missing seed (break between 90 and 100 -> only 10 seeds left).
+#   Each seed re-seeds the RNG from its own index, so the recovered run gives
+#   bit-identical metrics to an uninterrupted one. Delete the CSV to start over;
+#   the script refuses to resume onto a checkpoint written under other settings.
+#
 # --- run / MEFISTO settings (efficient here; make them fair for the real run) --
 #   N_SEEDS 100     -> paper scale; drop for a quick check
 #   MEF_MAXITER 100 -> raise (e.g. 1000) for full convergence
@@ -47,6 +55,7 @@ SAMPLING        <- "CLUSTERED"          # "ALIGNED" | "CLUSTERED" | "UNALIGNED"
 TIME_JITTER     <- 0.02               # sd of the visit-time noise when CLUSTERED
 
 N_SEEDS         <- 100
+CKPT_EVERY      <- 10                 # flush results to output/03_sims.csv every n seeds
 MEF_MAXITER     <- 1000
 MEF_CONVERGENCE <- "slow"
 MEF_OPTIMISE_GP <- TRUE
@@ -159,8 +168,62 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) stop("Install MOFA2: BiocManager
 cat(sprintf("== exp2: 1 x f (shared) curves, %s sampling, block structure; %d seeds ==\n",
             tolower(SAMPLING), N_SEEDS))
 
-res <- vector("list", N_SEEDS)
-for (s in 1:N_SEEDS) {
+# --- checkpointing ----------------------------------------------------------
+# Every seed is self-contained: gen_block(s) calls set.seed(s) before drawing
+# anything, so seed s always produces the same data and the same fit no matter
+# what ran before it. That is what makes a resumed run agree with a start-to-
+# finish run. Finished seeds are flushed to output/03_sims.csv every CKPT_EVERY
+# seeds; on start-up we read that file and only run the seeds still missing.
+dir.create("output", showWarnings = FALSE)
+.csv <- file.path("output", "03_sims.csv")
+.rds <- file.path("output", "03_sims.rds")   # same rows, exact doubles (see .write_ckpt)
+
+# Config stamp: refuse to resume onto a checkpoint written under different
+# settings, which would silently mix incompatible simulations.
+.sig <- sprintf("%s|jit=%g|N=%d|M=%d|P=%d|R=%d|NT=%d|noise=%g|off=%g|lam=%s|mef=%d/%s/%s",
+                SAMPLING, TIME_JITTER, N, M, P, R, NT, NOISE, OFFGROUP,
+                paste(LAMBDA[1:R], collapse = "+"),   # no commas: keeps the CSV one-field-per-column
+                MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
+
+# The CSV is the readable artifact, but no decimal format R writes round-trips a
+# double exactly (as.numeric mis-rounds long digit strings), so a CSV-only resume
+# would shift recovered metrics by ~1e-16. The .rds alongside it stores the same
+# rows as exact doubles and is what we actually resume from; the CSV still gates
+# whether a resume happens at all, so deleting it starts a clean run either way.
+.write_ckpt <- function(tab) {
+  tab <- tab[order(tab$seed), , drop = FALSE]
+  row.names(tab) <- NULL
+  utils::write.csv(tab, .csv, row.names = FALSE)
+  saveRDS(tab, .rds)
+  invisible(tab)
+}
+
+done <- NULL
+if (file.exists(.csv)) {
+  prev <- utils::read.csv(.csv, stringsAsFactors = FALSE)
+  if (file.exists(.rds)) {
+    exact <- readRDS(.rds)
+    if (identical(sort(exact$seed), sort(prev$seed))) prev <- exact
+  }
+  if (nrow(prev) > 0) {
+    if (any(prev$config != .sig))
+      stop(sprintf(paste0("%s was written under different settings:\n  checkpoint: %s\n  current:    %s\n",
+                          "Delete or rename it to start a fresh run."),
+                   .csv, prev$config[1], .sig))
+    done <- prev[prev$seed >= 1 & prev$seed <= N_SEEDS, , drop = FALSE]
+    done <- done[!duplicated(done$seed), , drop = FALSE]
+  }
+}
+todo <- setdiff(seq_len(N_SEEDS), done$seed)
+
+if (!is.null(done) && nrow(done) > 0)
+  cat(sprintf("resuming from %s: %d/%d seeds already done, %d to run\n",
+              .csv, nrow(done), N_SEEDS, length(todo)))
+if (length(todo) == 0) cat("all seeds already present in the checkpoint; nothing to run\n")
+
+res <- if (is.null(done)) list() else split(done, seq_len(nrow(done)))
+for (s in todo) {
+  cat(sprintf("[sim %d/%d] seed %d\n", s, N_SEEDS, s)); utils::flush.console()
   sim <- gen_block(s); grp <- sim$truth$subj_group
   t_mt <- system.time(mt <- multitempted_all(sim$featuretables, sim$timepoints, sim$subjectID,
                                              transforms = "none", do_ratio = FALSE, centralize = FALSE, smooth = 1e-4, r = R))[["elapsed"]]
@@ -177,13 +240,23 @@ for (s in 1:N_SEEDS) {
   mef_fe <- mean(vapply(1:R, function(l)
     .acor(mdec$shapes[, mmf$comp_of_group[l]], sim$truth$xi[[l]](gmf)), numeric(1)))
   
-  res[[s]] <- data.frame(seed = s, mt_time = t_mt, mef_time = t_mef,
-                         mt_miscl = mmt$err, mef_miscl = mmf$err, mt_fe = mt_fe, mef_fe = mef_fe)
-  if (s %% 10 == 0 || s <= 3)
-    cat(sprintf("  seed %d: miscl mT=%.2f MEF=%.2f | function-est mT=%.3f MEF=%.3f | time mT=%.1fs MEF=%.1fs\n",
-                s, mmt$err, mmf$err, mt_fe, mef_fe, t_mt, t_mef))
+  res[[as.character(s)]] <- data.frame(seed = s, mt_time = t_mt, mef_time = t_mef,
+                                       mt_miscl = mmt$err, mef_miscl = mmf$err,
+                                       mt_fe = mt_fe, mef_fe = mef_fe, config = .sig,
+                                       stringsAsFactors = FALSE)
+  cat(sprintf("  -> miscl mT=%.2f MEF=%.2f | function-est mT=%.3f MEF=%.3f | time mT=%.1fs MEF=%.1fs\n",
+              mmt$err, mmf$err, mt_fe, mef_fe, t_mt, t_mef))
+  
+  if (s %% CKPT_EVERY == 0 || s == N_SEEDS) {
+    .write_ckpt(do.call(rbind, res))
+    cat(sprintf("  -- checkpoint: %d seeds saved to %s\n",
+                length(res), normalizePath(.csv, mustWork = FALSE)))
+  }
 }
 R_all <- do.call(rbind, res)
+R_all <- R_all[order(R_all$seed), , drop = FALSE]   # seed order, so a resumed run
+row.names(R_all) <- NULL                            # summarises exactly like a full one
+.write_ckpt(R_all)
 
 summ <- data.frame(
   metric = c("misclassification error", "function estimation (|cor|)", "compute time (s)"),
