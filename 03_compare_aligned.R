@@ -1,65 +1,61 @@
 # ============================================================================
-# exp2_aligned_1xf.R   (storyline point 3)
+# 03_compare_aligned.R   (storyline point 3)
 #
-# Setting that FAVORS MEFISTO -- yet multiTEMPTED still wins:
-#   * 1 x f temporal functions: each component uses the SAME curve in every
-#     modality (dynamics identical across modalities -> MEFISTO can represent it).
-#   * sampling times set by SAMPLING (see below); the default "ALIGNED" gives
-#     every subject and modality one shared time grid, so all modalities are
-#     co-measured (MEFISTO's natural case).
-#   * block structure: subjects split into r groups (one per component) with a
-#     matching feature subset per modality; component l is "on" only for group-l
-#     subjects and subset-l features.
+# PURPOSE
+# Hand MEFISTO the kind of data it was designed for, and ask whether
+# multiTEMPTED still matches or beats it. Script 02 shows multiTEMPTED winning
+# where MEFISTO is structurally unable to compete, because a MEFISTO factor
+# carries one trajectory shared across modalities and cannot express dynamics
+# that differ between them. That result only carries weight if multiTEMPTED also
+# holds up on MEFISTO's own ground, which is what this script tests.
 #
-# MEFISTO is run with group = subject (its per-subject GP); it is NOT told which
-# subjects share a group. Over many random seeds we compare both methods on:
-#   (a) group loading -- misclassification error (1 - group-assignment accuracy),
-#   (b) function estimation -- |cor| of the estimated temporal curve with truth.
+# DESIGN, AND WHY
+#   * 1 x f temporal functions -- each component uses the SAME curve in every
+#     modality. This is a dynamic MEFISTO CAN represent, so any remaining gap is
+#     about estimation quality rather than model class.
+#   * block structure -- subjects split into r groups (one per component), with a
+#     matching feature subset per modality, so component l is "on" only for
+#     group-l subjects and subset-l features. This plants a discrete ground truth
+#     that can be scored without worrying about sign or scale conventions.
+#   * group = subject -- MEFISTO gets its per-subject GP but is NOT told which
+#     subjects belong to the same block; both methods have to discover that.
 #
-# Expected story: even on MEFISTO's home turf, multiTEMPTED classifies subjects
-# and estimates the curves at least as well, usually better.
+# MEASURED over many random seeds
+#   (a) group loading       -- misclassification error (1 - assignment accuracy)
+#   (b) function estimation -- |cor| of the estimated temporal curve with truth
 #
-# --- sampling design -------------------------------------------------------
-#   SAMPLING "ALIGNED"   -> every subject and modality sampled at exactly the
-#                           same NT grid times (the original behaviour).
-#            "CLUSTERED" -> samples land in a small cloud around the nominal grid
-#                           times (sd = TIME_JITTER); the visit schedule is still
-#                           recognisable but no two subjects share a time.
-#                           CLUSTER_BY picks how the cloud is drawn:
-#                             "visit"  one draw per subject, shared by its M
-#                                      modalities -> co-measured, N*NT samples.
-#                             "sample" an independent draw per (subject,modality)
-#                                      -> nothing co-measured, N*M*NT samples.
-#            "UNALIGNED" -> every subject x modality draws its own random times,
-#                           exactly as in 02_compare_unaligned.R.
-#   NOTE: these drive MEFISTO's cost far more than any other knob, and the two
-#   CLUSTER_BY settings rank OPPOSITELY depending on MEF_OPTIMISE_GP.
-#   Measured, one GP hyperparameter update (r=3, N=15, M=3, NT=8):
-#                            GP off      GP on
-#     CLUSTERED "visit"      ~250 s       73 s     (120 MOFA samples)
-#     CLUSTERED "sample"       ~5 s      195 s     (360 MOFA samples)
-#     02's unaligned data        --      100 s     (288 MOFA samples)
-#     ALIGNED                    --     >1 h       (groups share covariate values,
-#                                                   so MEFISTO also fits a G x G
-#                                                   group covariance -- avoid)
-#   With GP on the step is dominated by a group-kernel optimisation costing
-#   O(N^3) in the number of distinct (subject,time) samples, so sample count
-#   wins; with GP off the per-iteration updates dominate and it reverses.
+# SAMPLING DESIGN (SAMPLING, CLUSTER_BY)
+#   "ALIGNED"   every subject and modality share one time grid, so everything is
+#               co-measured -- the cleanest possible case for MEFISTO.
+#   "CLUSTERED" samples fall in a small cloud around the nominal visit times
+#               (sd = TIME_JITTER): a fixed schedule that real subjects drift
+#               from. CLUSTER_BY = "visit" jitters once per subject, so that
+#               subject's modalities stay co-measured, as they would be if drawn
+#               in one sitting; "sample" jitters per (subject, modality), so
+#               nothing is co-measured.
+#   "UNALIGNED" every subject x modality draws its own random times, as in 02.
 #
-# --- checkpointing ---------------------------------------------------------
-#   Long runs are resumable. Finished seeds are appended to output/03_sims.csv
-#   every CKPT_EVERY seeds; re-running the script reads that file and picks up
-#   at the first missing seed (break between 90 and 100 -> only 10 seeds left).
-#   Each seed re-seeds the RNG from its own index, so the recovered run gives
-#   bit-identical metrics to an uninterrupted one. Delete the CSV to start over;
-#   the script refuses to resume onto a checkpoint written under other settings.
+#   These choices dominate MEFISTO's runtime -- more so than any other knob here.
+#   Its GP step additionally fits a group x group covariance whenever subjects
+#   share covariate values, which makes ALIGNED far slower than the alternatives
+#   and impractical at paper scale. Among the rest, cost climbs steeply with the
+#   number of distinct (subject, time) samples, so with GP optimisation ON the
+#   co-measured CLUSTER_BY = "visit" is the cheaper option; with it OFF the
+#   ranking reverses. multiTEMPTED's cost is unaffected throughout.
 #
-# --- run / MEFISTO settings (efficient here; make them fair for the real run) --
-#   N_SEEDS 100     -> paper scale; drop for a quick check
-#   MEF_MAXITER 100 -> raise (e.g. 1000) for full convergence
-#   MEF_CONVERGENCE -> "fast" (checking) or "slow" (fair)
-#   MEF_OPTIMISE_GP -> FALSE (checking; faster). TRUE tunes the GP lengthscale
-#                      (MEFISTO's fair setting; see the cost note above).
+# CHECKPOINTING
+#   Long runs are resumable: finished seeds are flushed to output/03_sims.csv
+#   every CKPT_EVERY seeds, and re-running picks up at the first missing seed.
+#   Each seed re-seeds the RNG from its own index, so a resumed run reproduces an
+#   uninterrupted one exactly. Delete the CSV to start over; the script refuses
+#   to resume onto a checkpoint written under different settings.
+#
+# RUN / MEFISTO SETTINGS
+#   N_SEEDS is the paper scale; drop it for a quick check. MEF_MAXITER,
+#   MEF_CONVERGENCE and MEF_OPTIMISE_GP trade speed for fairness: fewer
+#   iterations with "fast" and GP optimisation off for checking, more iterations
+#   with "slow" and GP optimisation on for the real comparison -- the fair
+#   setting, and much the slowest.
 # ============================================================================
 
 library(multi.tempted)
