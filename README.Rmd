@@ -1,38 +1,92 @@
 ---
 title: "multi.tempted.sim"
-output: github_document
+output:
+  github_document:
+    html_preview: false
 ---
 
-Simulations comparing **multiTEMPTED** to **MEFISTO** (MOFA2). Each script is
-self-contained, runs top-to-bottom, prints a summary, and writes a PDF (figure +
-a table page) into `output/`.
+Simulations comparing **multiTEMPTED** with **MEFISTO** (MOFA2) on multi-omic
+longitudinal data. Each script is self-contained, runs top-to-bottom, prints a
+summary, and writes a PDF (figure + table page) into `output/`.
 
-## Scripts (storyline order)
+## What is being compared
 
-| Script | Setting | Shows |
+Both methods decompose several subject × feature × time tensors into a few
+interpretable components. They differ in which kind of variation they allow, and
+the difference is a mirror image:
+
+- **multiTEMPTED** gives every modality its own smooth temporal curve, but within
+  a component all subjects share that curve, scaled by a subject loading.
+  *Omics may follow different time courses; subjects share one.*
+- **MEFISTO** gives every subject its own Gaussian-process trajectory, but a
+  factor carries a single trajectory shared across modalities.
+  *Subjects may follow different time courses; omics share one.*
+
+The synthetic experiments target this asymmetry from both sides — first where the
+truth is modality-specific (hard for MEFISTO), then where it is shared across
+modalities (MEFISTO's own ground) — before turning to real data.
+
+## Scripts
+
+| Script | Setting | What it shows | Figure |
+|---|---|---|---|
+| `01_validate.R` | multiTEMPTED only; 5 noise levels × 20 seeds | recovers planted components almost exactly at low noise, degrading smoothly as noise grows | [PDF](output/01_validate.pdf) |
+| `02_compare_unaligned.R` | modality-specific curves, unaligned sampling times, 10 seeds | MEFISTO cannot express curves that differ across modalities, and needs far more compute | [PDF](output/02_compare_unaligned.pdf) |
+| `03_compare_aligned.R` | shared curves, block-structured subjects, 100 seeds | even where MEFISTO can represent the truth, multiTEMPTED recovers groups and curves better | [PDF](output/03_compare_aligned.pdf) |
+| `04_compare_ipop.R` | real iPOP omics (cytokine, metabolome, lipid, protein) | multiTEMPTED's subject embedding separates by sex more sharply | [PDF](output/04_compare_ipop.pdf) |
+
+## Results
+
+Recovery is scored as `|cor|` between an estimate and the planted truth;
+misclassification is `1 -` group-assignment accuracy.
+
+| | multiTEMPTED | MEFISTO |
 |---|---|---|
-| `01_validate.R` | multiTEMPTED only | recovers the truth under the correct model |
-| `02_compare_unaligned.R` | modality-specific curves, **unaligned** time, a few seeds | MEFISTO is slow and cannot estimate modality-specific dynamics |
-| `03_compare_aligned.R` | shared curves, **aligned** time, block groups, many seeds | even on MEFISTO's favorable turf, multiTEMPTED classifies subjects and estimates curves better |
-| `04_compare_ipop.R` | real iPOP omics | both subject embeddings separate by sex |
+| **01** subject / feature / temporal recovery, noise 0.1 | 0.999 / 0.999 / 0.996 | — |
+| **01** same, noise 4.0 | 0.281 / 0.262 / 0.431 | — |
+| **02** temporal curve recovery | 0.990 | 0.671 |
+| **03** subject misclassification | 0.000 | 0.472 |
+| **03** temporal curve recovery | 0.971 | 0.738 |
+| **04** max \|cor(score, sex)\| | 0.53 | 0.16 |
+
+Across every comparison multiTEMPTED also fits in a small fraction of the time
+MEFISTO takes — a gap of several orders of magnitude, widening as the number of
+distinct sampling times grows.
 
 ## Run
 
 ```{r eval=FALSE}
-source("01_validate.R")          # fast
-source("02_compare_unaligned.R") # slow (MEFISTO on unaligned data)
-source("03_compare_aligned.R")   # scale N_SEEDS at the top
+source("01_validate.R")          # multiTEMPTED only; quick
+source("02_compare_unaligned.R") # MEFISTO on unaligned data; slow
+source("03_compare_aligned.R")   # resumable, see below
 source("04_compare_ipop.R")      # real data; MEFISTO is the slow step
 ```
 
-PDFs land in `output/`. Requires the `multi.tempted` and `MOFA2` packages
-(`BiocManager::install("MOFA2")` also pulls `basilisk`, which supplies the Python
-backend — no manual setup).
+Each script writes to an `output/` folder beside the script itself, so results
+land in the project regardless of the session's working directory.
 
-## MEFISTO settings (top of each comparison script)
+## Settings
 
-`MEF_OPTIMISE_GP`, `MEF_MAXITER`, `MEF_CONVERGENCE`, and (in 02/03) `N_SEEDS`
-trade speed for fairness. For quick checks use `MEF_OPTIMISE_GP <- FALSE`,
-`MEF_MAXITER <- 100`, `"fast"`; for the paper's fair comparison turn GP
-optimisation on, raise the iterations, and set `"slow"`. multiTEMPTED's cost is
-unaffected.
+`MEF_MAXITER`, `MEF_CONVERGENCE` and `MEF_OPTIMISE_GP` (top of 02–04) trade speed
+for fairness: fewer iterations with `"fast"` and GP optimisation off for quick
+checks; more iterations with `"slow"` and GP optimisation on for the real
+comparison. `N_SEEDS` sets the scale. multiTEMPTED's cost is unaffected by any of
+these.
+
+In `03`, `SAMPLING` chooses how sampling times are drawn — `"ALIGNED"` (one
+shared grid), `"CLUSTERED"` (a cloud around nominal visit times, with
+`CLUSTER_BY` deciding whether a subject's modalities stay co-measured), or
+`"UNALIGNED"` (independent random times). This dominates MEFISTO's runtime more
+than any other knob, because its GP step additionally fits a group × group
+covariance whenever subjects share sampling times; `"ALIGNED"` is therefore much
+the slowest and impractical at full scale.
+
+`03` is also resumable: completed seeds are written to `output/03_sims.csv` every
+`CKPT_EVERY` seeds, and re-running picks up at the first missing seed. Because
+each seed re-seeds the RNG from its own index, a resumed run reproduces an
+uninterrupted one exactly. Delete the CSV to start over.
+
+## Requirements
+
+The `multi.tempted` and `MOFA2` packages. `BiocManager::install("MOFA2")` also
+pulls `basilisk`, which supplies the Python backend — no manual setup needed.
