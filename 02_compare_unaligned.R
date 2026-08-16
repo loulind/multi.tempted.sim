@@ -26,6 +26,36 @@
 
 library(multi.tempted)
 
+# Everything is written to <this script's folder>/output, NOT to getwd(), so the
+# results land in the project no matter where the session's working directory
+# happens to point. Covers source()/RStudio "Source", Rscript, and running lines
+# interactively in RStudio; if none of those can identify the file it falls back
+# to getwd() and says so.
+.outdir <- local({
+  d <- NULL
+  for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
+    of <- sys.frame(i)$ofile
+    if (!is.null(of)) { d <- dirname(normalizePath(of, mustWork = FALSE)); break }
+  }
+  if (is.null(d)) {                                     # Rscript 02_compare_unaligned.R
+    a <- commandArgs(trailingOnly = FALSE)
+    a <- sub("^--file=", "", a[grepl("^--file=", a)])
+    if (length(a)) d <- dirname(normalizePath(a[1], mustWork = FALSE))
+  }
+  if (is.null(d) && requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {                      # RStudio, running lines by hand
+    p <- tryCatch(rstudioapi::getSourceEditorContext()$path, error = function(e) NULL)
+    if (!is.null(p) && nzchar(p)) d <- dirname(normalizePath(p, mustWork = FALSE))
+  }
+  if (is.null(d)) {
+    d <- getwd()
+    warning("could not locate the script file; writing output/ under ", d, call. = FALSE)
+  }
+  file.path(d, "output")
+})
+dir.create(.outdir, showWarnings = FALSE, recursive = TRUE)
+cat(sprintf("output directory: %s\n", .outdir))
+
 N_SEEDS         <- 10
 MEF_MAXITER     <- 1000
 MEF_CONVERGENCE <- "slow"
@@ -173,8 +203,7 @@ unit  <- function(v) { v <- v - mean(v); if (sqrt(sum(v^2)) > 0) v / sqrt(sum(v^
 align <- function(e, r) if (stats::cor(e, r) < 0) -e else e
 fine  <- seq(0, 1, length.out = 200)
 
-dir.create("output", showWarnings = FALSE)
-.pdf <- file.path("output", "02_compare_unaligned.pdf")
+.pdf <- file.path(.outdir, "02_compare_unaligned.pdf")
 .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
 grDevices::pdf(.pdf, width = 2.7 * R, height = 2.5 * M + 1.2)
 graphics::par(mfrow = c(M, R), mar = c(3, 3, 2, 1), mgp = c(1.7, 0.5, 0))

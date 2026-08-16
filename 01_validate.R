@@ -25,6 +25,36 @@
 # pak::pkg_install("loulind/multi.tempted")
 library(multi.tempted)
 
+# Everything is written to <this script's folder>/output, NOT to getwd(), so the
+# results land in the project no matter where the session's working directory
+# happens to point. Covers source()/RStudio "Source", Rscript, and running lines
+# interactively in RStudio; if none of those can identify the file it falls back
+# to getwd() and says so.
+.outdir <- local({
+  d <- NULL
+  for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
+    of <- sys.frame(i)$ofile
+    if (!is.null(of)) { d <- dirname(normalizePath(of, mustWork = FALSE)); break }
+  }
+  if (is.null(d)) {                                     # Rscript 01_validate.R
+    a <- commandArgs(trailingOnly = FALSE)
+    a <- sub("^--file=", "", a[grepl("^--file=", a)])
+    if (length(a)) d <- dirname(normalizePath(a[1], mustWork = FALSE))
+  }
+  if (is.null(d) && requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {                      # RStudio, running lines by hand
+    p <- tryCatch(rstudioapi::getSourceEditorContext()$path, error = function(e) NULL)
+    if (!is.null(p) && nzchar(p)) d <- dirname(normalizePath(p, mustWork = FALSE))
+  }
+  if (is.null(d)) {
+    d <- getwd()
+    warning("could not locate the script file; writing output/ under ", d, call. = FALSE)
+  }
+  file.path(d, "output")
+})
+dir.create(.outdir, showWarnings = FALSE, recursive = TRUE)
+cat(sprintf("output directory: %s\n", .outdir))
+
 # ---- temporal loading function shapes -------
 # Each shape is a function of u in [0, 1] (the generator maps the real time
 # interval T onto [0, 1] before evaluating, so shapes are independent of the
@@ -403,8 +433,7 @@ print(summ, row.names = FALSE)
 
 
 # ------ PDF: recovery-vs-noise plot + example overlay + summary table ------
-dir.create("output", showWarnings = FALSE)
-out_pdf <- file.path("output", "01_validate.pdf")
+out_pdf <- file.path(.outdir, "01_validate.pdf")
 .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
 grDevices::pdf(out_pdf, width = 7.5, height = 6.5)
 

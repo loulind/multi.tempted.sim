@@ -79,6 +79,36 @@ N <- 15; M <- 3; P <- 24; R <- 3; NT <- 8; NOISE <- 1.0; LAMBDA <- c(8, 6, 4); O
 stopifnot(SAMPLING %in% c("ALIGNED", "CLUSTERED", "UNALIGNED"),
           CLUSTER_BY %in% c("sample", "visit"))
 
+# Everything is written to <this script's folder>/output, NOT to getwd(), so the
+# results land in the project no matter where the session's working directory
+# happens to point. Covers source()/RStudio "Source", Rscript, and running lines
+# interactively in RStudio; if none of those can identify the file it falls back
+# to getwd() and says so.
+.outdir <- local({
+  d <- NULL
+  for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
+    of <- sys.frame(i)$ofile
+    if (!is.null(of)) { d <- dirname(normalizePath(of, mustWork = FALSE)); break }
+  }
+  if (is.null(d)) {                                     # Rscript 03_compare_aligned.R
+    a <- commandArgs(trailingOnly = FALSE)
+    a <- sub("^--file=", "", a[grepl("^--file=", a)])
+    if (length(a)) d <- dirname(normalizePath(a[1], mustWork = FALSE))
+  }
+  if (is.null(d) && requireNamespace("rstudioapi", quietly = TRUE) &&
+      rstudioapi::isAvailable()) {                      # RStudio, running lines by hand
+    p <- tryCatch(rstudioapi::getSourceEditorContext()$path, error = function(e) NULL)
+    if (!is.null(p) && nzchar(p)) d <- dirname(normalizePath(p, mustWork = FALSE))
+  }
+  if (is.null(d)) {
+    d <- getwd()
+    warning("could not locate the script file; writing output/ under ", d, call. = FALSE)
+  }
+  file.path(d, "output")
+})
+dir.create(.outdir, showWarnings = FALSE, recursive = TRUE)
+cat(sprintf("output directory: %s\n", .outdir))
+
 
 # ============================================================================
 # helpers
@@ -194,9 +224,8 @@ cat(sprintf("== exp2: 1 x f (shared) curves, %s sampling, block structure; %d se
 # what ran before it. That is what makes a resumed run agree with a start-to-
 # finish run. Finished seeds are flushed to output/03_sims.csv every CKPT_EVERY
 # seeds; on start-up we read that file and only run the seeds still missing.
-dir.create("output", showWarnings = FALSE)
-.csv <- file.path("output", "03_sims.csv")
-.rds <- file.path("output", "03_sims.rds")   # same rows, exact doubles (see .write_ckpt)
+.csv <- file.path(.outdir, "03_sims.csv")
+.rds <- file.path(.outdir, "03_sims.rds")    # same rows, exact doubles (see .write_ckpt)
 
 # Config stamp: refuse to resume onto a checkpoint written under different
 # settings, which would silently mix incompatible simulations.
@@ -292,8 +321,7 @@ cat("\n== summary over seeds (mean +/- sd) ==\n"); print(summ, row.names = FALSE
 # ============================================================================
 # figure: boxplots across seeds + summary table page
 # ============================================================================
-dir.create("output", showWarnings = FALSE)
-.pdf <- file.path("output", "03_compare_aligned.pdf")
+.pdf <- file.path(.outdir, "03_compare_aligned.pdf")
 .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
 grDevices::pdf(.pdf, width = 9, height = 4.6)
 graphics::par(mfrow = c(1, 2), mar = c(3, 4, 3, 1), mgp = c(2.3, 0.8, 0))
