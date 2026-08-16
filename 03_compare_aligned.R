@@ -23,15 +23,28 @@
 #   SAMPLING "ALIGNED"   -> every subject and modality sampled at exactly the
 #                           same NT grid times (the original behaviour).
 #            "CLUSTERED" -> samples land in a small cloud around the nominal grid
-#                           times (sd = TIME_JITTER), drawn independently for each
-#                           subject AND modality, so nothing is exactly co-measured
-#                           but the visit schedule is still recognisable.
+#                           times (sd = TIME_JITTER); the visit schedule is still
+#                           recognisable but no two subjects share a time.
+#                           CLUSTER_BY picks how the cloud is drawn:
+#                             "visit"  one draw per subject, shared by its M
+#                                      modalities -> co-measured, N*NT samples.
+#                             "sample" an independent draw per (subject,modality)
+#                                      -> nothing co-measured, N*M*NT samples.
 #            "UNALIGNED" -> every subject x modality draws its own random times,
 #                           exactly as in 02_compare_unaligned.R.
-#   NOTE: this drives MEFISTO's cost far more than any other knob. Its GP step
-#   optimises a group x group covariance only when groups share covariate values,
-#   so "ALIGNED" is by far the most expensive of the three (measured: a single GP
-#   hyperparameter update takes ~1 h aligned vs ~10 min for 02's unaligned data).
+#   NOTE: these drive MEFISTO's cost far more than any other knob, and the two
+#   CLUSTER_BY settings rank OPPOSITELY depending on MEF_OPTIMISE_GP.
+#   Measured, one GP hyperparameter update (r=3, N=15, M=3, NT=8):
+#                            GP off      GP on
+#     CLUSTERED "visit"      ~250 s       73 s     (120 MOFA samples)
+#     CLUSTERED "sample"       ~5 s      195 s     (360 MOFA samples)
+#     02's unaligned data        --      100 s     (288 MOFA samples)
+#     ALIGNED                    --     >1 h       (groups share covariate values,
+#                                                   so MEFISTO also fits a G x G
+#                                                   group covariance -- avoid)
+#   With GP on the step is dominated by a group-kernel optimisation costing
+#   O(N^3) in the number of distinct (subject,time) samples, so sample count
+#   wins; with GP off the per-iteration updates dominate and it reverses.
 #
 # --- checkpointing ---------------------------------------------------------
 #   Long runs are resumable. Finished seeds are appended to output/03_sims.csv
@@ -53,6 +66,7 @@ library(multi.tempted)
 
 SAMPLING        <- "CLUSTERED"          # "ALIGNED" | "CLUSTERED" | "UNALIGNED"
 TIME_JITTER     <- 0.02               # sd of the visit-time noise when CLUSTERED
+CLUSTER_BY      <- "visit"           # CLUSTERED only: "sample" | "visit" (see header)
 
 N_SEEDS         <- 100
 CKPT_EVERY      <- 10                 # flush results to output/03_sims.csv every n seeds
@@ -62,7 +76,8 @@ MEF_OPTIMISE_GP <- TRUE
 
 N <- 15; M <- 3; P <- 24; R <- 3; NT <- 8; NOISE <- 1.0; LAMBDA <- c(8, 6, 4); OFFGROUP <- 0.05
 
-stopifnot(SAMPLING %in% c("ALIGNED", "CLUSTERED", "UNALIGNED"))
+stopifnot(SAMPLING %in% c("ALIGNED", "CLUSTERED", "UNALIGNED"),
+          CLUSTER_BY %in% c("sample", "visit"))
 
 
 # ============================================================================
@@ -90,17 +105,22 @@ gen_block <- function(seed) {
   fine <- seq(0, 1, length.out = 2001)
   xi <- lapply(1:R, function(l) { nrm <- sqrt(.trapz(fine, shapes[[l]](fine)^2)); function(t) shapes[[l]](t) / nrm })
   grid <- seq(0, 1, length.out = NT)                                # nominal visit schedule
-  # Sampling times, drawn per (modality, subject). CLUSTERED jitter is reflected
-  # at 0 and 1 rather than clamped, to avoid piling samples up on the two
-  # endpoints (which would re-align them across subjects and modalities).
+  # CLUSTERED jitter is reflected at 0 and 1 rather than clamped, to avoid piling
+  # samples up on the two endpoints (which would re-align them across subjects).
   .reflect01 <- function(u) { u <- abs(u); 1 - abs(1 - u) }
+  .jitter <- function() sort(.reflect01(grid + stats::rnorm(NT, sd = TIME_JITTER)))
+  # CLUSTER_BY = "visit": one draw per subject, reused by all M modalities, so a
+  # subject's omics stay co-measured (N*NT MOFA samples). "sample": an independent
+  # draw per (subject, modality), so nothing is co-measured (N*M*NT samples).
+  visit <- if (SAMPLING == "CLUSTERED" && CLUSTER_BY == "visit")
+    lapply(1:N, function(i) .jitter()) else NULL
   ft <- tp <- sid <- vector("list", M)
   for (m in 1:M) {
     per <- vector("list", N); tv <- numeric(0); sv <- character(0)
     for (i in 1:N) {
       ts <- switch(SAMPLING,
                    ALIGNED   = grid,
-                   CLUSTERED = sort(.reflect01(grid + stats::rnorm(NT, sd = TIME_JITTER))),
+                   CLUSTERED = if (CLUSTER_BY == "visit") visit[[i]] else .jitter(),
                    UNALIGNED = sort(stats::runif(NT, 0, 1)))
       Xi <- vapply(1:R, function(l) xi[[l]](ts), numeric(NT))       # truth at the ACTUAL times
       per[[i]] <- t(B[[m]] %*% (t(Xi) * (Lambda[m, ] * A[i, ])) +
@@ -180,8 +200,8 @@ dir.create("output", showWarnings = FALSE)
 
 # Config stamp: refuse to resume onto a checkpoint written under different
 # settings, which would silently mix incompatible simulations.
-.sig <- sprintf("%s|jit=%g|N=%d|M=%d|P=%d|R=%d|NT=%d|noise=%g|off=%g|lam=%s|mef=%d/%s/%s",
-                SAMPLING, TIME_JITTER, N, M, P, R, NT, NOISE, OFFGROUP,
+.sig <- sprintf("%s/%s|jit=%g|N=%d|M=%d|P=%d|R=%d|NT=%d|noise=%g|off=%g|lam=%s|mef=%d/%s/%s",
+                SAMPLING, CLUSTER_BY, TIME_JITTER, N, M, P, R, NT, NOISE, OFFGROUP,
                 paste(LAMBDA[1:R], collapse = "+"),   # no commas: keeps the CSV one-field-per-column
                 MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
 
@@ -287,7 +307,8 @@ graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
 tbl <- c(sprintf("exp2: 1 x f shared curves, block structure; %d seeds (N=%d, M=%d, p=%d, r=%d)",
                  N_SEEDS, N, M, P, R),
          sprintf("sampling: %s%s", SAMPLING,
-                 if (SAMPLING == "CLUSTERED") sprintf(" (time jitter sd=%g)", TIME_JITTER) else ""),
+                 if (SAMPLING == "CLUSTERED")
+                   sprintf(" by %s (time jitter sd=%g)", CLUSTER_BY, TIME_JITTER) else ""),
          sprintf("MEFISTO: maxiter=%d, %s, GP-opt=%s", MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP), "",
          "Summary over seeds:", utils::capture.output(print(summ, row.names = FALSE)))
 graphics::plot.new(); graphics::mtext("exp2: misclassification & function estimation (log output)", side = 3, line = 0.5, font = 2)
