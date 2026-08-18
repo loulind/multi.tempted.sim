@@ -319,13 +319,16 @@ cat("\n== summary over seeds (mean +/- sd) ==\n"); print(summ, row.names = FALSE
 # ============================================================================
 .pdf <- file.path(.outdir, "03_compare_aligned.pdf")
 .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
-grDevices::pdf(.pdf, width = 9, height = 4.6)
-graphics::par(mfrow = c(1, 2), mar = c(3, 4, 3, 1), mgp = c(2.3, 0.8, 0))
+grDevices::pdf(.pdf, width = 13, height = 4.6)
+graphics::par(mfrow = c(1, 3), mar = c(3, 4, 3, 1), mgp = c(2.3, 0.8, 0))
 cols <- c("#D55E00", "#0072B2")
 boxplot(list(multiTEMPTED = R_all$mt_miscl, MEFISTO = R_all$mef_miscl), col = cols,
         ylab = "misclassification error", main = "group loading", ylim = c(0, max(0.05, R_all$mef_miscl)))
 boxplot(list(multiTEMPTED = R_all$mt_fe, MEFISTO = R_all$mef_fe), col = cols,
         ylab = "function estimation |cor|", main = "temporal curve recovery", ylim = c(min(R_all$mef_fe, 0.8), 1))
+# compute time spans several orders of magnitude -> log scale
+boxplot(list(multiTEMPTED = R_all$mt_time, MEFISTO = R_all$mef_time), col = cols, log = "y",
+        ylab = "seconds per seed (log scale)", main = "compute time")
 # table page
 graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
 tbl <- c(sprintf("exp2: 1 x f shared curves, block structure; %d seeds (N=%d, M=%d, p=%d, r=%d)",
