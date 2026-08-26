@@ -59,6 +59,15 @@
 # ============================================================================
 
 library(multi.tempted)
+library(ggplot2)
+library(patchwork)
+
+# --- plot aesthetics --------------------------------------------------------
+# Deliberately kept in the analysis scripts rather than inside multi.tempted's
+# plotting functions, so they can be changed without touching the package.
+# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
+THEME_MS    <- theme_bw(base_size = 12)
+METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
 SAMPLING        <- "CLUSTERED"          # "ALIGNED" | "CLUSTERED" | "UNALIGNED"
 TIME_JITTER     <- 0.02               # sd of the visit-time noise when CLUSTERED
@@ -318,27 +327,29 @@ cat("\n== summary over seeds (mean +/- sd) ==\n"); print(summ, row.names = FALSE
 # figure: boxplots across seeds + summary table page
 # ============================================================================
 .pdf <- file.path(.outdir, "03_compare_aligned.pdf")
-.dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
-grDevices::pdf(.pdf, width = 13, height = 4.6)
-graphics::par(mfrow = c(1, 3), mar = c(3, 4, 3, 1), mgp = c(2.3, 0.8, 0))
-cols <- c("#D55E00", "#0072B2")
-boxplot(list(multiTEMPTED = R_all$mt_miscl, MEFISTO = R_all$mef_miscl), col = cols,
-        ylab = "misclassification error", main = "group loading", ylim = c(0, max(0.05, R_all$mef_miscl)))
-boxplot(list(multiTEMPTED = R_all$mt_fe, MEFISTO = R_all$mef_fe), col = cols,
-        ylab = "function estimation |cor|", main = "temporal curve recovery", ylim = c(min(R_all$mef_fe, 0.8), 1))
-# compute time spans several orders of magnitude -> log scale
-boxplot(list(multiTEMPTED = R_all$mt_time, MEFISTO = R_all$mef_time), col = cols, log = "y",
-        ylab = "seconds per seed (log scale)", main = "compute time")
-# table page
-graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
-tbl <- c(sprintf("exp2: 1 x f shared curves, block structure; %d seeds (N=%d, M=%d, p=%d, r=%d)",
-                 N_SEEDS, N, M, P, R),
-         sprintf("sampling: %s%s", SAMPLING,
-                 if (SAMPLING == "CLUSTERED")
-                   sprintf(" by %s (time jitter sd=%g)", CLUSTER_BY, TIME_JITTER) else ""),
-         sprintf("MEFISTO: maxiter=%d, %s, GP-opt=%s", MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP), "",
-         "Summary over seeds:", utils::capture.output(print(summ, row.names = FALSE)))
-graphics::plot.new(); graphics::mtext("exp2: misclassification & function estimation (log output)", side = 3, line = 0.5, font = 2)
-graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.85)
-grDevices::dev.off()
-cat(sprintf("\n  boxplots + table written to %s\n", normalizePath(.pdf, mustWork = FALSE)))
+
+box_df <- rbind(
+  data.frame(method = "multiTEMPTED", value = R_all$mt_miscl, panel = "miscl"),
+  data.frame(method = "MEFISTO",      value = R_all$mef_miscl, panel = "miscl"),
+  data.frame(method = "multiTEMPTED", value = R_all$mt_fe,     panel = "fe"),
+  data.frame(method = "MEFISTO",      value = R_all$mef_fe,    panel = "fe"),
+  data.frame(method = "multiTEMPTED", value = R_all$mt_time,   panel = "time"),
+  data.frame(method = "MEFISTO",      value = R_all$mef_time,  panel = "time"))
+box_df$method <- factor(box_df$method, levels = names(METHOD_COLS))
+
+.boxpanel <- function(key, ylab, title) {
+  ggplot(box_df[box_df$panel == key, ], aes(x = method, y = value, fill = method)) +
+    geom_boxplot(width = 0.6, alpha = 0.8, outlier.size = 1, linewidth = 0.4) +
+    scale_fill_manual(values = METHOD_COLS, name = NULL) +
+    labs(title = title, x = NULL, y = ylab) +
+    THEME_MS + theme(legend.position = "none",
+                     plot.title = element_text(hjust = 0.5, face = "bold"))
+}
+
+p_box <- .boxpanel("miscl", "Misclassification error", "Group loading") |
+         .boxpanel("fe",    "Function estimation |cor|", "Temporal curve recovery") |
+         (.boxpanel("time", "Seconds per seed (log scale)", "Compute time") +
+            scale_y_log10())
+
+ggsave(.pdf, p_box, width = 12, height = 4.2, bg = "white")
+cat(sprintf("\n  boxplots written to %s\n", normalizePath(.pdf, mustWork = FALSE)))

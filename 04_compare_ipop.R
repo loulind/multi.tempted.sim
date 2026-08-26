@@ -27,6 +27,15 @@
 
 # pak::pkg_install("loulind/multi.tempted")
 library(multi.tempted)
+library(ggplot2)
+library(patchwork)
+
+# --- plot aesthetics --------------------------------------------------------
+# Deliberately kept in the analysis scripts rather than inside multi.tempted's
+# plotting functions, so they can be changed without touching the package.
+# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
+THEME_MS    <- theme_bw(base_size = 12)
+METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
 # Everything is written to <this script's folder>/output, NOT to getwd(), so the
 # results land in the project no matter where the session's working directory
@@ -98,13 +107,37 @@ cat(sprintf("iPOP: %d of %d subjects with all %d visits, %d modalities, features
 # ============================================================================
 # multiTEMPTED
 # ============================================================================
-cat("\n== multiTEMPTED on iPOP ==\n")
-mt <- multitempted_all(featuretables = featuretables,
-                       timepoints    = timepoints,
-                       subjectID     = subjectID,
-                       transforms    = "none",   # already log10
-                       do_ratio      = FALSE,    # not counts
-                       r             = r)        # centralize = TRUE (default)
+# --- saving the completed run ----------------------------------------------
+# The MEFISTO fit here is slow, so the whole run is saved ONCE when it finishes:
+# the subject embeddings to 04_ipop.csv and the agreement tables to 04_ipop.rds.
+# Re-running the script then goes straight to the figure, so the plot can be
+# restyled without repeating either fit. Delete the files to force a fresh run;
+# the script refuses to reuse results saved under other settings.
+.csv <- file.path(.outdir, "04_ipop.csv")
+.rds <- file.path(.outdir, "04_ipop.rds")
+.sig <- sprintf("r=%d|mods=%s|mef=%d/%s/%s", r, paste(mods, collapse = "+"),
+                MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
+
+cached <- NULL
+if (file.exists(.rds)) {
+  cc <- readRDS(.rds)
+  if (!identical(cc$config, .sig))
+    stop(sprintf(paste0("%s was saved under different settings:\n  saved:   %s\n  current: %s\n",
+                        "Delete or rename it to start a fresh run."), .rds, cc$config, .sig))
+  cached <- cc
+  cat(sprintf("reusing the completed run in %s; skipping both fits\n",
+              normalizePath(.rds, mustWork = FALSE)))
+}
+
+if (is.null(cached)) {
+  cat("\n== multiTEMPTED on iPOP ==\n")
+  mt <- multitempted_all(featuretables = featuretables,
+                         timepoints    = timepoints,
+                         subjectID     = subjectID,
+                         transforms    = "none",   # already log10
+                         do_ratio      = FALSE,    # not counts
+                         r             = r)        # centralize = TRUE (default)
+}
 
 
 # ============================================================================
@@ -160,41 +193,62 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   message("MOFA2 not installed; skipping MEFISTO. Install with:\n",
           "  BiocManager::install('MOFA2')   # basilisk supplies the Python backend")
 } else {
-  cat("\n== MEFISTO on iPOP (subjects as groups, time as covariate) ==\n")
-  cat("   training ... this is the slow step (~10 min); raise MEF_MAXITER for a fuller fit\n")
-  mef <- run_mefisto(featuretables, timepoints, subjectID, n_factors = r)
+  if (is.null(cached)) {
+    cat("\n== MEFISTO on iPOP (subjects as groups, time as covariate) ==\n")
+    cat("   training ... this is the slow step; raise MEF_MAXITER for a fuller fit\n")
+    mef <- run_mefisto(featuretables, timepoints, subjectID, n_factors = r)
 
-  # ---- (i) feature-loading agreement, per modality --------------------------
-  # For each multiTEMPTED component, the best |cor| with any MEFISTO factor's
-  # weights in that modality (loadings are only defined up to sign/scale).
-  W <- MOFA2::get_weights(mef)
+    # ---- (i) feature-loading agreement, per modality ------------------------
+    # For each multiTEMPTED component, the best |cor| with any MEFISTO factor's
+    # weights in that modality (loadings are only defined up to sign/scale).
+    W <- MOFA2::get_weights(mef)
+    agree <- sapply(mods, function(m) {
+      Bm <- mt$B_hat[[m]]
+      Wm <- W[[m]][rownames(Bm), , drop = FALSE]
+      sapply(1:r, function(l) max(abs(stats::cor(Wm, Bm[, l])), na.rm = TRUE))
+    })  # r x M
+    rownames(agree) <- paste0("multiTEMPTED_PC", 1:r)
+
+    # ---- (ii) subject-embedding agreement -----------------------------------
+    # multiTEMPTED gives one score per subject per component (A_hat). MEFISTO
+    # gives a factor value per (subject, time); average over time to get a
+    # per-subject score, then align subjects and correlate the two embeddings.
+    Zg     <- MOFA2::get_factors(mef, groups = "all")     # list per subject
+    Zsub   <- t(sapply(Zg, colMeans))                     # subjects x factors
+    common <- intersect(rownames(mt$A_hat), rownames(Zsub))
+    A_mt   <- mt$A_hat[common, , drop = FALSE]
+    Z_mef  <- Zsub[common, , drop = FALSE]
+    emb_cor <- sapply(1:r, function(l) max(abs(stats::cor(Z_mef, A_mt[, l])), na.rm = TRUE))
+
+    # ---- (iii) sex signal: does each method's embedding capture it? ---------
+    # |point-biserial correlation| between each component's subject score and sex.
+    sex_v   <- sex[common]
+    sex_mt  <- abs(apply(A_mt,  2, function(s) stats::cor(s, sex_v)))
+    sex_mef <- abs(apply(Z_mef, 2, function(s) stats::cor(s, sex_v)))
+
+    # ---- save the finished run ----------------------------------------------
+    embed <- data.frame(subject = common, sex = as.integer(sex_v),
+                        stringsAsFactors = FALSE)
+    for (l in 1:r) embed[[paste0("mt_PC", l)]] <- A_mt[, l]
+    for (l in 1:r) embed[[paste0("mef_F", l)]] <- Z_mef[, l]
+    utils::write.csv(embed, .csv, row.names = FALSE)
+    saveRDS(list(config = .sig, embed = embed, agree = agree, emb_cor = emb_cor,
+                 sex_mt = sex_mt, sex_mef = sex_mef), .rds)
+    cat(sprintf("\n  run saved to %s and %s\n",
+                normalizePath(.csv, mustWork = FALSE),
+                normalizePath(.rds, mustWork = FALSE)))
+  } else {
+    agree   <- cached$agree;  emb_cor <- cached$emb_cor
+    sex_mt  <- cached$sex_mt; sex_mef <- cached$sex_mef
+    A_mt    <- as.matrix(cached$embed[, paste0("mt_PC", 1:r), drop = FALSE])
+    Z_mef   <- as.matrix(cached$embed[, paste0("mef_F", 1:r), drop = FALSE])
+    sex_v   <- cached$embed$sex
+  }
+
   cat("\n-- feature-loading agreement (best |cor| between the methods' loadings) --\n")
-  agree <- sapply(mods, function(m) {
-    Bm <- mt$B_hat[[m]]
-    Wm <- W[[m]][rownames(Bm), , drop = FALSE]
-    sapply(1:r, function(l) max(abs(stats::cor(Wm, Bm[, l])), na.rm = TRUE))
-  })  # r x M
-  rownames(agree) <- paste0("multiTEMPTED_PC", 1:r)
   print(round(agree, 2))
-
-  # ---- (ii) subject-embedding agreement -------------------------------------
-  # multiTEMPTED gives one score per subject per component (A_hat). MEFISTO gives
-  # a factor value per (subject, time); average over time to get a per-subject
-  # score, then align subjects and correlate the two embeddings.
-  Zg <- MOFA2::get_factors(mef, groups = "all")          # list per subject
-  Zsub <- t(sapply(Zg, colMeans))                        # subjects x factors
-  common <- intersect(rownames(mt$A_hat), rownames(Zsub))
-  A_mt  <- mt$A_hat[common, , drop = FALSE]
-  Z_mef <- Zsub[common, , drop = FALSE]
-  emb_cor <- sapply(1:r, function(l) max(abs(stats::cor(Z_mef, A_mt[, l])), na.rm = TRUE))
   cat("\n-- subject-embedding agreement: best |cor| of each multiTEMPTED score with a MEFISTO factor --\n")
   print(round(stats::setNames(emb_cor, paste0("PC", 1:r)), 2))
-
-  # ---- (iii) sex signal: does each method's embedding capture it? -----------
-  # |point-biserial correlation| between each component's subject score and sex.
-  sex_v <- sex[common]
-  sex_mt  <- abs(apply(A_mt,  2, function(s) stats::cor(s, sex_v)))
-  sex_mef <- abs(apply(Z_mef, 2, function(s) stats::cor(s, sex_v)))
   cat("\n-- sex association |cor(score, sex)| per component (max = best sex-separating axis) --\n")
   cat(sprintf("  multiTEMPTED: %s   (max %.2f)\n",
               paste(sprintf("PC%d=%.2f", 1:r, sex_mt), collapse = "  "), max(sex_mt)))
@@ -208,40 +262,30 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   cat("  vs per-feature centering), so they are NOT expected to agree closely -- low\n")
   cat("  agreement reflects different models, not one being 'wrong'.\n")
 
-  # ---- (iv) PDF: first two subject PCs, both methods, coloured by sex --------
-  # multiTEMPTED: subject loadings A_hat[,1:2]. MEFISTO: per-subject mean of
-  # factors 1:2. Subjects are aligned (common set); colour by sex.
-  col_sex <- ifelse(sex_v == 1, "#0072B2", "#D55E00")   # male = blue, female = orange
+  # ---- (iv) PDF: first two subject components, both methods, coloured by sex --
+  # Aesthetics follow the MOMSPI analysis: geom_point(size = 2, alpha = 0.8),
+  # theme_bw(base_size = 12), legends collected across the two panels.
+  SEX_COLS <- c(male = "#4A90D9", female = "#E05C5C")
+  sex_lab  <- factor(ifelse(sex_v == 1, "male", "female"), levels = names(SEX_COLS))
   .pdf <- file.path(.outdir, "04_compare_ipop.pdf")
-  .dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
-  grDevices::pdf(.pdf, width = 9, height = 4.6)
-  op <- graphics::par(mfrow = c(1, 2), mar = c(4, 4, 3, 1), mgp = c(2.3, 0.8, 0))
-  plot(A_mt[, 1], A_mt[, 2], col = col_sex, pch = 19,
-       xlab = "PC1", ylab = "PC2", main = "multiTEMPTED subject loadings")
-  graphics::legend("topright", c("male", "female"), col = c("#0072B2", "#D55E00"),
-                   pch = 19, bty = "n")
-  plot(Z_mef[, 1], Z_mef[, 2], col = col_sex, pch = 19,
-       xlab = "Factor 1", ylab = "Factor 2", main = "MEFISTO subject factors")
 
-  # --- final page: the tables also printed to the log ---
-  graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
-  tbl <- c(
-    "Feature-loading agreement (best |cor| between the methods' loadings):",
-    utils::capture.output(print(round(agree, 2))),
-    "",
-    "Subject-embedding agreement (best |cor| of each multiTEMPTED score with a MEFISTO factor):",
-    utils::capture.output(print(round(stats::setNames(emb_cor, paste0("PC", 1:r)), 2))),
-    "",
-    "Sex association |cor(score, sex)| per component (max = best sex-separating axis):",
-    sprintf("  multiTEMPTED: %s   (max %.2f)",
-            paste(sprintf("PC%d=%.2f", 1:r, sex_mt), collapse = "  "), max(sex_mt)),
-    sprintf("  MEFISTO:      %s   (max %.2f)",
-            paste(sprintf("F%d=%.2f", 1:r, sex_mef), collapse = "  "), max(sex_mef)))
-  graphics::plot.new()
-  graphics::mtext("iPOP: multiTEMPTED vs MEFISTO (log output)", side = 3, line = 0.5, font = 2)
-  graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.75)
+  .scatter <- function(d, title, xlab, ylab)
+    ggplot(d, aes(x = x, y = y, colour = sex)) +
+      geom_point(size = 2, alpha = 0.8) +
+      scale_colour_manual(values = SEX_COLS, name = "Sex") +
+      labs(title = title, subtitle = "Subject embedding", x = xlab, y = ylab) +
+      THEME_MS + theme(plot.title    = element_text(hjust = 0.5, face = "bold"),
+                       plot.subtitle = element_text(hjust = 0.5))
 
-  graphics::par(op); grDevices::dev.off()
-  cat(sprintf("\n  first-two-PC scatter (coloured by sex) + tables written to %s\n",
+  d_mt  <- data.frame(x = A_mt[, 1],  y = A_mt[, 2],  sex = sex_lab)
+  d_mef <- data.frame(x = Z_mef[, 1], y = Z_mef[, 2], sex = sex_lab)
+
+  p_ipop <- (.scatter(d_mt,  "multiTEMPTED on iPOP", "Component 1", "Component 2") +
+               theme(legend.position = "none")) +
+            .scatter(d_mef, "MEFISTO on iPOP",      "Factor 1",    "Factor 2") +
+            plot_layout(ncol = 2, guides = "collect")
+
+  ggsave(.pdf, p_ipop, width = 10, height = 4.5, bg = "white")
+  cat(sprintf("\n  subject embeddings (coloured by sex) written to %s\n",
               normalizePath(.pdf, mustWork = FALSE)))
 }

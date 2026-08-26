@@ -24,6 +24,15 @@
 
 # pak::pkg_install("loulind/multi.tempted")
 library(multi.tempted)
+library(ggplot2)
+library(patchwork)
+
+# --- plot aesthetics --------------------------------------------------------
+# Deliberately kept in the analysis scripts rather than inside multi.tempted's
+# plotting functions, so they can be changed without touching the package.
+# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
+THEME_MS    <- theme_bw(base_size = 12)
+METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
 # Everything is written to <this script's folder>/output, NOT to getwd(), so the
 # results land in the project no matter where the session's working directory
@@ -432,40 +441,60 @@ cat("\n== recovery accuracy (|cor| with truth) by noise level, mean +/- sd over 
 print(summ, row.names = FALSE)
 
 
-# ------ PDF: recovery-vs-noise plot + example overlay + summary table ------
+# ------ PDF figures (ggplot2, white background, manuscript theme) ------
+LOADING_COLS <- c(subject = "#4A90D9", feature = "#E05C5C", temporal = "#5CB85C")
+
+rec_df <- do.call(rbind, lapply(names(LOADING_COLS), function(nm)
+  data.frame(noise = NOISE_LEVELS, loading = nm,
+             mean = as.numeric(mns(nm)), sd = as.numeric(sds(nm)))))
+rec_df$loading <- factor(rec_df$loading, levels = names(LOADING_COLS))
+
+p_recovery <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading)) +
+  geom_errorbar(aes(ymin = pmax(0, mean - sd), ymax = pmin(1, mean + sd)),
+                width = 0.05, linewidth = 0.4) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_x_log10(breaks = NOISE_LEVELS, labels = NOISE_LEVELS) +
+  scale_colour_manual(values = LOADING_COLS, name = "Loading") +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(title    = "multiTEMPTED recovery decreases with noise",
+       subtitle = sprintf("%d seeds per noise level; mean +/- sd", N_SEEDS),
+       x = "Noise SD (log scale)", y = "Recovery accuracy (|cor| with truth)") +
+  THEME_MS + theme(plot.title    = element_text(hjust = 0.5, face = "bold"),
+                   plot.subtitle = element_text(hjust = 0.5))
+
 out_pdf <- file.path(.outdir, "01_validate.pdf")
-.dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
-grDevices::pdf(out_pdf, width = 7.5, height = 6.5)
+ggsave(out_pdf, p_recovery, width = 7.5, height = 5, bg = "white")
 
-## page 1: recovery accuracy vs noise (the requested plot)
-cols <- c(subject = "#0072B2", feature = "#D55E00", temporal = "#009E73")
-graphics::par(mfrow = c(1, 1), mar = c(4.2, 4.4, 3, 1), mgp = c(2.5, 0.8, 0))
-plot(NA, xlim = range(NOISE_LEVELS), ylim = c(0, 1), log = "x",
-     xlab = "noise SD (log scale)", ylab = "recovery accuracy  (|cor| with truth)",
-     main = "multiTEMPTED recovery decreases with noise")
-for (nm in names(cols)) {
-  m <- mns(nm); sdv <- sds(nm)
-  graphics::arrows(NOISE_LEVELS, pmax(0, m - sdv), NOISE_LEVELS, pmin(1, m + sdv),
-                   angle = 90, code = 3, length = 0.03, col = cols[nm])
-  graphics::lines(NOISE_LEVELS, m, type = "b", pch = 19, lwd = 2, col = cols[nm])
-}
-graphics::legend("bottomleft", names(cols), col = cols, lwd = 2, pch = 19, bty = "n",
-                 title = "loading")
-graphics::mtext(sprintf("%d seeds per noise level", N_SEEDS), side = 3, line = 0.2, cex = 0.85)
+# companion figure: estimated vs true curves at the lowest noise level
+.unit <- function(v) v / sqrt(sum(v^2))
+Mv <- low$sim$params$M; rv <- low$sim$params$r; mtch <- low$report$match
+curve_df <- do.call(rbind, lapply(1:Mv, function(m) do.call(rbind, lapply(1:rv, function(lh) {
+  tg  <- low$fit$time_Zeta[[m]]
+  est <- .unit(low$fit$Zeta_hat[[m]][, lh])
+  tru <- .unit(low$sim$truth$xi[[m]][[mtch[lh]]](tg))
+  if (stats::cor(est, tru) < 0) est <- -est
+  pan <- sprintf("Modality %d - PC %d (%s)", m, lh, low$sim$truth$shape_names[m, mtch[lh]])
+  rbind(data.frame(time = tg, value = tru, series = "true",         panel = pan),
+        data.frame(time = tg, value = est, series = "multiTEMPTED", panel = pan))
+}))))
+curve_df$series <- factor(curve_df$series, levels = c("true", "multiTEMPTED"))
 
-## page 2: example recovered curves at the lowest noise level (validation visual)
-plot_temporal_recovery(low$sim, low$fit, low$report, file = NULL)
+p_curves <- ggplot(curve_df, aes(x = time, y = value, colour = series, linetype = series)) +
+  geom_line(linewidth = 0.8) +
+  facet_wrap(~ panel, ncol = rv, scales = "free_y") +
+  scale_colour_manual(values = c(true = "black", multiTEMPTED = "#4A90D9"), name = NULL) +
+  scale_linetype_manual(values = c(true = "solid", multiTEMPTED = "22"), name = NULL) +
+  labs(title    = "Estimated vs true temporal loadings",
+       subtitle = sprintf("lowest noise level (SD = %g)", NOISE_LEVELS[1]),
+       x = "Time", y = "Loading") +
+  THEME_MS + theme(plot.title    = element_text(hjust = 0.5, face = "bold"),
+                   plot.subtitle = element_text(hjust = 0.5),
+                   legend.position = "bottom")
 
-## page 3: summary table
-graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
-tbl <- c(sprintf("multiTEMPTED validation: m x f curves, unaligned; %d noise levels x %d seeds",
-                 length(NOISE_LEVELS), N_SEEDS),
-         "", "Recovery accuracy (|cor| with truth), mean +/- sd over seeds:",
-         utils::capture.output(print(summ, row.names = FALSE)))
-graphics::plot.new()
-graphics::mtext("multiTEMPTED validation (log output)", side = 3, line = 0.5, font = 2)
-graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.9)
+curves_pdf <- file.path(.outdir, "01_validate_curves.pdf")
+ggsave(curves_pdf, p_curves, width = 9, height = 7, bg = "white")
 
-grDevices::dev.off()
-cat(sprintf("\n  recovery-vs-noise plot + overlay + table written to %s\n",
-            normalizePath(out_pdf, mustWork = FALSE)))
+cat(sprintf("\n  recovery-vs-noise written to %s\n  curve overlay written to %s\n",
+            normalizePath(out_pdf, mustWork = FALSE),
+            normalizePath(curves_pdf, mustWork = FALSE)))

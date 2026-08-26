@@ -25,6 +25,15 @@
 # ============================================================================
 
 library(multi.tempted)
+library(ggplot2)
+library(patchwork)
+
+# --- plot aesthetics --------------------------------------------------------
+# Deliberately kept in the analysis scripts rather than inside multi.tempted's
+# plotting functions, so they can be changed without touching the package.
+# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
+THEME_MS    <- theme_bw(base_size = 12)
+METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
 # Everything is written to <this script's folder>/output, NOT to getwd(), so the
 # results land in the project no matter where the session's working directory
@@ -162,8 +171,31 @@ mefisto_decompose <- function(model, r, n_bins = 12) {
 if (!requireNamespace("MOFA2", quietly = TRUE)) stop("Install MOFA2: BiocManager::install('MOFA2')")
 cat(sprintf("== exp1: m x f (modality-specific) curves, unaligned; %d seeds ==\n", N_SEEDS))
 
+# --- saving the completed run ----------------------------------------------
+# The MEFISTO fits here take hours, so the whole run is saved ONCE when the last
+# seed finishes: metrics to 02_sims.csv and everything the figure needs to
+# 02_sims.rds. Re-running the script then goes straight to the figure, so the
+# plot can be restyled without repeating the fits. Delete the files to force a
+# fresh run; the script refuses to reuse results saved under other settings.
+.csv <- file.path(.outdir, "02_sims.csv")
+.rds <- file.path(.outdir, "02_sims.rds")
+.sig <- sprintf("N=%d|M=%d|P=%d|R=%d|NT=%d|noise=%g|lam=%s|seeds=%d|mef=%d/%s/%s",
+                N, M, P, R, NT, NOISE, paste(LAMBDA[1:R], collapse = "+"),
+                N_SEEDS, MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
+
+cached <- NULL
+if (file.exists(.rds)) {
+  cc <- readRDS(.rds)
+  if (!identical(cc$config, .sig))
+    stop(sprintf(paste0("%s was saved under different settings:\n  saved:   %s\n  current: %s\n",
+                        "Delete or rename it to start a fresh run."), .rds, cc$config, .sig))
+  cached <- cc
+  cat(sprintf("reusing the completed run in %s (%d seeds); skipping the fits\n",
+              normalizePath(.rds, mustWork = FALSE), nrow(cc$R_all)))
+}
+
 res <- vector("list", N_SEEDS); keep_seed1 <- NULL
-for (s in 1:N_SEEDS) {
+for (s in if (is.null(cached)) seq_len(N_SEEDS) else integer(0)) {
   sim <- gen_mxf(s)
   t_mt <- system.time(mt <- multitempted_all(sim$featuretables, sim$timepoints, sim$subjectID,
              transforms = "none", do_ratio = FALSE, centralize = FALSE, smooth = 1e-4, r = R))[["elapsed"]]
@@ -186,7 +218,7 @@ for (s in 1:N_SEEDS) {
   cat(sprintf("  seed %d: time mT=%.1fs MEF=%.1fs | function-est mT=%.3f MEF=%.3f\n",
               s, t_mt, t_mef, mean(mt_fe), mean(mef_fe)))
 }
-R_all <- do.call(rbind, res)
+R_all <- if (is.null(cached)) do.call(rbind, res) else cached$R_all
 
 summ <- data.frame(
   metric = c("compute time (s)", "function estimation (|cor|)"),
@@ -198,34 +230,48 @@ cat("\n== summary over seeds ==\n"); print(summ, row.names = FALSE)
 # ============================================================================
 # figure: estimated vs true curves (seed 1) + summary table page
 # ============================================================================
-k1 <- keep_seed1
-unit  <- function(v) { v <- v - mean(v); if (sqrt(sum(v^2)) > 0) v / sqrt(sum(v^2)) else v }
-align <- function(e, r) if (stats::cor(e, r) < 0) -e else e
-fine  <- seq(0, 1, length.out = 200)
+.unit  <- function(v) { v <- v - mean(v); if (sqrt(sum(v^2)) > 0) v / sqrt(sum(v^2)) else v }
+.align <- function(e, ref) if (stats::cor(e, ref) < 0) -e else e
+fine   <- seq(0, 1, length.out = 200)
 
 .pdf <- file.path(.outdir, "02_compare_unaligned.pdf")
-.dl <- grDevices::dev.list(); if (!is.null(.dl)) for (.d in .dl[names(.dl) == "pdf"]) grDevices::dev.off(.d)
-grDevices::pdf(.pdf, width = 2.7 * R, height = 2.5 * M + 1.2)
-graphics::par(mfrow = c(M, R), mar = c(3, 3, 2, 1), mgp = c(1.7, 0.5, 0))
-for (m in 1:M) for (l in 1:R) {
-  tru  <- unit(k1$sim$truth$xi[[m]][[l]](fine))
-  mtv  <- align(unit(k1$mt$Zeta_hat[[m]][, k1$mt_k[l]]), unit(k1$sim$truth$xi[[m]][[l]](k1$gmt)))
-  mefv <- align(unit(k1$mdec$shapes[, k1$mef_k[l]]),     unit(k1$sim$truth$xi[[m]][[l]](k1$gmf)))
-  plot(fine, tru, type = "l", lwd = 2.4, col = "black", ylim = range(c(tru, mtv, mefv)),
-       xlab = "time", ylab = "loading", main = sprintf("mod%d  PC%d", m, l))
-  graphics::lines(k1$gmt, mtv, lwd = 2, lty = 2, col = "#D55E00")
-  graphics::lines(k1$gmf, mefv, lwd = 2, lty = 3, col = "#0072B2")
-  if (m == 1 && l == 1) graphics::legend("bottomright", c("true", "multiTEMPTED", "MEFISTO"),
-    lwd = 2, lty = c(1, 2, 3), col = c("black", "#D55E00", "#0072B2"), bty = "n", cex = 0.8)
+
+if (is.null(cached)) {
+  k1 <- keep_seed1
+  curve_df <- do.call(rbind, lapply(1:M, function(m) do.call(rbind, lapply(1:R, function(l) {
+    tru  <- .unit(k1$sim$truth$xi[[m]][[l]](fine))
+    mtv  <- .align(.unit(k1$mt$Zeta_hat[[m]][, k1$mt_k[l]]),
+                   .unit(k1$sim$truth$xi[[m]][[l]](k1$gmt)))
+    mefv <- .align(.unit(k1$mdec$shapes[, k1$mef_k[l]]),
+                   .unit(k1$sim$truth$xi[[m]][[l]](k1$gmf)))
+    pan  <- sprintf("Modality %d - PC %d", m, l)
+    rbind(data.frame(time = fine,   value = tru,  series = "true",         panel = pan),
+          data.frame(time = k1$gmt, value = mtv,  series = "multiTEMPTED", panel = pan),
+          data.frame(time = k1$gmf, value = mefv, series = "MEFISTO",      panel = pan))
+  }))))
+  curve_df$series <- factor(curve_df$series, levels = c("true", names(METHOD_COLS)))
+  # save the finished run: metrics as CSV, plus everything the figure needs
+  utils::write.csv(R_all, .csv, row.names = FALSE)
+  saveRDS(list(config = .sig, R_all = R_all, curve_df = curve_df), .rds)
+  cat(sprintf("  run saved to %s and %s\n",
+              normalizePath(.csv, mustWork = FALSE),
+              normalizePath(.rds, mustWork = FALSE)))
+} else {
+  curve_df <- cached$curve_df
 }
-# table page
-graphics::par(mfrow = c(1, 1), mar = c(0.5, 0.5, 2.4, 0.5))
-tbl <- c(sprintf("exp1: m x f curves, unaligned timepoints; %d seeds (N=%d, M=%d, p=%d, r=%d)",
-                 N_SEEDS, N, M, P, R),
-         sprintf("MEFISTO: maxiter=%d, %s, GP-opt=%s", MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP), "",
-         "Per-seed results:", utils::capture.output(print(round(R_all, 3), row.names = FALSE)), "",
-         "Summary:", utils::capture.output(print(summ, row.names = FALSE)))
-graphics::plot.new(); graphics::mtext("exp1: time & function estimation (log output)", side = 3, line = 0.5, font = 2)
-graphics::text(0, 1, paste(tbl, collapse = "\n"), family = "mono", adj = c(0, 1), cex = 0.8)
-grDevices::dev.off()
-cat(sprintf("\n  curves + table written to %s\n", normalizePath(.pdf, mustWork = FALSE)))
+
+p_curves <- ggplot(curve_df, aes(x = time, y = value, colour = series, linetype = series)) +
+  geom_line(linewidth = 0.8) +
+  facet_wrap(~ panel, ncol = R, scales = "free_y") +
+  scale_colour_manual(values = c(true = "black", METHOD_COLS), name = NULL) +
+  scale_linetype_manual(values = c(true = "solid", multiTEMPTED = "22", MEFISTO = "42"),
+                        name = NULL) +
+  labs(title    = "Estimated vs true temporal loadings",
+       subtitle = "modality-specific curves, unaligned sampling times (seed 1)",
+       x = "Time", y = "Loading") +
+  THEME_MS + theme(plot.title      = element_text(hjust = 0.5, face = "bold"),
+                   plot.subtitle   = element_text(hjust = 0.5),
+                   legend.position = "bottom")
+
+ggsave(.pdf, p_curves, width = 3.1 * R, height = 2.6 * M + 1.2, bg = "white")
+cat(sprintf("\n  curves written to %s\n", normalizePath(.pdf, mustWork = FALSE)))
