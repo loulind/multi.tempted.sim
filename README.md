@@ -3,8 +3,8 @@ multi.tempted.sim
 
 Simulations comparing **multiTEMPTED** with **MEFISTO** (MOFA2) on
 multi-omic longitudinal data. Each script is self-contained, runs
-top-to-bottom, prints a summary, and writes a PDF (figure + table page)
-into `output/`.
+top-to-bottom, prints a summary, and writes its figures — and, where the
+fits are slow, its results — into `output/`.
 
 ## What is being compared
 
@@ -27,11 +27,11 @@ real data.
 
 ## Scripts
 
-| Script | Setting | What it shows | Figure |
+| Script | Setting | What it shows | Figures |
 |----|----|----|----|
-| `01_validate.R` | multiTEMPTED only; 5 noise levels × 20 seeds | recovers planted components almost exactly at low noise, degrading smoothly as noise grows | [PDF](output/01_validate.pdf) |
+| `01_validate.R` | multiTEMPTED only; 5 noise levels × 20 seeds | recovers planted components almost exactly at low noise, degrading smoothly as noise grows | [recovery](output/01_validate.pdf), [curves](output/01_validate_curves.pdf) |
 | `02_compare_unaligned.R` | modality-specific curves, unaligned sampling times, 10 seeds | MEFISTO cannot express curves that differ across modalities, and needs far more compute | [PDF](output/02_compare_unaligned.pdf) |
-| `03_compare_aligned.R` | shared curves, block-structured subjects, 100 seeds | even where MEFISTO can represent the truth, multiTEMPTED recovers groups and curves better | [PDF](output/03_compare_aligned.pdf) |
+| `03_compare_aligned.R` | shared curves, block-structured subjects, 100 seeds | even where MEFISTO can represent the truth, multiTEMPTED recovers groups and curves better, and far faster | [PDF](output/03_compare_aligned.pdf) |
 | `04_compare_ipop.R` | real iPOP omics (cytokine, metabolome, lipid, protein) | multiTEMPTED’s subject embedding separates by sex more sharply | [PDF](output/04_compare_ipop.pdf) |
 
 ## Results
@@ -50,20 +50,46 @@ misclassification is `1 -` group-assignment accuracy.
 
 Across every comparison multiTEMPTED also fits in a small fraction of
 the time MEFISTO takes — a gap of several orders of magnitude, widening
-as the number of distinct sampling times grows.
+as the number of distinct sampling times grows. `03`’s figure shows this
+directly as a per-seed compute-time panel alongside the two accuracy
+panels.
 
 ## Run
 
 ``` r
 source("01_validate.R")          # multiTEMPTED only; quick
 source("02_compare_unaligned.R") # MEFISTO on unaligned data; slow
-source("03_compare_aligned.R")   # resumable, see below
+source("03_compare_aligned.R")   # long, resumable
 source("04_compare_ipop.R")      # real data; MEFISTO is the slow step
 ```
 
 Each script writes to an `output/` folder beside the script itself, so
 results land in the project regardless of the session’s working
-directory.
+directory, and prints that destination on start-up.
+
+## Reusing a finished run
+
+The MEFISTO fits in `02`–`04` are slow, so each of those scripts saves
+its results and reuses them on a re-run. Re-running then skips the fits
+and goes straight to the figure, which makes re-plotting or restyling
+free.
+
+| Script | Saved to | When |
+|----|----|----|
+| `02_compare_unaligned.R` | `02_sims.csv`, `02_sims.rds` | once, after the last seed |
+| `03_compare_aligned.R` | `03_sims.csv`, `03_sims.rds` | every `CKPT_EVERY` seeds |
+| `04_compare_ipop.R` | `04_ipop.csv`, `04_ipop.rds` | once, after the run |
+
+`03` is additionally **resumable mid-run**: it picks up at the first
+missing seed, so an interruption costs at most `CKPT_EVERY` seeds.
+Because every seed re-seeds the RNG from its own index, a resumed run
+reproduces an uninterrupted one exactly. `02` and `04` save only on
+completion, so an interruption there costs the whole run.
+
+In each case the CSV is the readable artifact and the RDS carries the
+exact values used for plotting. Delete them to force a fresh run; each
+script refuses to reuse results saved under different settings,
+reporting both configurations.
 
 ## Settings
 
@@ -82,14 +108,12 @@ step additionally fits a group × group covariance whenever subjects
 share sampling times; `"ALIGNED"` is therefore much the slowest and
 impractical at full scale.
 
-`03` is also resumable: completed seeds are written to
-`output/03_sims.csv` every `CKPT_EVERY` seeds, and re-running picks up
-at the first missing seed. Because each seed re-seeds the RNG from its
-own index, a resumed run reproduces an uninterrupted one exactly. Delete
-the CSV to start over.
+Plot aesthetics (theme, palette, point size) are set in a short block at
+the top of each script rather than inside the package’s plotting
+functions, so they can be changed without touching `multi.tempted`.
 
 ## Requirements
 
-The `multi.tempted` and `MOFA2` packages.
-`BiocManager::install("MOFA2")` also pulls `basilisk`, which supplies
-the Python backend — no manual setup needed.
+The `multi.tempted` and `MOFA2` packages, plus `ggplot2` and `patchwork`
+for the figures. `BiocManager::install("MOFA2")` also pulls `basilisk`,
+which supplies the Python backend — no manual setup needed.
