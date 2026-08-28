@@ -3,8 +3,8 @@ multi.tempted.sim
 
 Simulations comparing **multiTEMPTED** with **MEFISTO** (MOFA2) on
 multi-omic longitudinal data. Each script is self-contained, runs
-top-to-bottom, prints a summary, and writes its figures — and, where the
-fits are slow, its results — into `output/`.
+top-to-bottom, prints a summary, and writes its figures (and, where the
+fits are slow, its results) into `output/`.
 
 ## What is being compared
 
@@ -20,10 +20,10 @@ they allow, and the difference is a mirror image:
   but a factor carries a single trajectory shared across modalities.
   *Subjects may follow different time courses; omics share one.*
 
-The synthetic experiments target this asymmetry from both sides — first
+The synthetic experiments target this asymmetry from both sides: first
 where the truth is modality-specific (hard for MEFISTO), then where it
-is shared across modalities (MEFISTO’s own ground) — before turning to
-real data.
+is shared across modalities (MEFISTO’s own ground). Real data comes
+last.
 
 ## Scripts
 
@@ -41,15 +41,15 @@ misclassification is `1 -` group-assignment accuracy.
 
 |  | multiTEMPTED | MEFISTO |
 |----|----|----|
-| **01** subject / feature / temporal recovery, noise 0.1 | 0.999 / 0.999 / 0.996 | — |
-| **01** same, noise 4.0 | 0.281 / 0.262 / 0.431 | — |
+| **01** subject / feature / temporal recovery, noise 0.1 | 0.999 / 0.999 / 0.996 | n/a |
+| **01** same, noise 4.0 | 0.281 / 0.262 / 0.431 | n/a |
 | **02** temporal curve recovery | 0.990 | 0.671 |
 | **03** subject misclassification | 0.000 | 0.472 |
 | **03** temporal curve recovery | 0.971 | 0.738 |
 | **04** max \|cor(score, sex)\| | 0.53 | 0.16 |
 
 Across every comparison multiTEMPTED also fits in a small fraction of
-the time MEFISTO takes — a gap of several orders of magnitude, widening
+the time MEFISTO takes: a gap of several orders of magnitude, widening
 as the number of distinct sampling times grows. `03`’s figure shows this
 directly as a per-seed compute-time panel alongside the two accuracy
 panels.
@@ -99,7 +99,7 @@ optimisation off for quick checks; more iterations with `"slow"` and GP
 optimisation on for the real comparison. `N_SEEDS` sets the scale.
 multiTEMPTED’s cost is unaffected by any of these.
 
-In `03`, `SAMPLING` chooses how sampling times are drawn — `"ALIGNED"`
+In `03`, `SAMPLING` chooses how sampling times are drawn: `"ALIGNED"`
 (one shared grid), `"CLUSTERED"` (a cloud around nominal visit times,
 with `CLUSTER_BY` deciding whether a subject’s modalities stay
 co-measured), or `"UNALIGNED"` (independent random times). This
@@ -116,4 +116,4 @@ functions, so they can be changed without touching `multi.tempted`.
 
 The `multi.tempted` and `MOFA2` packages, plus `ggplot2` and `patchwork`
 for the figures. `BiocManager::install("MOFA2")` also pulls `basilisk`,
-which supplies the Python backend — no manual setup needed.
+which supplies the Python backend; no manual setup needed.
