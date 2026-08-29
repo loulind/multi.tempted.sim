@@ -18,8 +18,8 @@
 # The run at the bottom is a NOISE STUDY: several noise levels x many seeds
 # (default 5 x 20 = 100 runs). It reports recovery accuracy (|cor| of the
 # estimated subject / feature / temporal loadings with truth) per noise level
-# and writes output/01_validate.pdf: a recovery-vs-noise plot, example recovered
-# curves, and a summary table.
+# and writes output/01_validate.pdf: one figure with the recovery-vs-noise plot
+# (A) beside the estimated-vs-true curves at the lowest noise level (B).
 # ============================================================================
 
 # pak::pkg_install("loulind/multi.tempted")
@@ -463,10 +463,7 @@ p_recovery <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading)) +
   THEME_MS + theme(plot.title    = element_text(hjust = 0.5, face = "bold"),
                    plot.subtitle = element_text(hjust = 0.5))
 
-out_pdf <- file.path(.outdir, "01_validate.pdf")
-ggsave(out_pdf, p_recovery, width = 7.5, height = 5, bg = "white")
-
-# companion figure: estimated vs true curves at the lowest noise level
+# right panel: estimated vs true curves at the lowest noise level
 .unit <- function(v) v / sqrt(sum(v^2))
 Mv <- low$sim$params$M; rv <- low$sim$params$r; mtch <- low$report$match
 curve_df <- do.call(rbind, lapply(1:Mv, function(m) do.call(rbind, lapply(1:rv, function(lh) {
@@ -492,9 +489,15 @@ p_curves <- ggplot(curve_df, aes(x = time, y = value, colour = series, linetype 
                    plot.subtitle = element_text(hjust = 0.5),
                    legend.position = "bottom")
 
-curves_pdf <- file.path(.outdir, "01_validate_curves.pdf")
-ggsave(curves_pdf, p_curves, width = 9, height = 7, bg = "white")
+# ---- one figure: the two panels side by side, each with its own bottom legend --
+# patchwork rather than gridExtra: grid.arrange does not align panel regions
+# across subplots, so the two plotting areas would not line up.
+out_pdf <- file.path(.outdir, "01_validate.pdf")
+.leg_bottom <- theme(legend.position = "bottom", legend.justification = "center")
+p_fig <- ((p_recovery + .leg_bottom) | (p_curves + .leg_bottom)) +
+  plot_layout(widths = c(1, 1.6)) +
+  plot_annotation(tag_levels = "A")
 
-cat(sprintf("\n  recovery-vs-noise written to %s\n  curve overlay written to %s\n",
-            normalizePath(out_pdf, mustWork = FALSE),
-            normalizePath(curves_pdf, mustWork = FALSE)))
+ggsave(out_pdf, p_fig, width = 14, height = 6, bg = "white")
+cat(sprintf("\n  validation figure written to %s\n",
+            normalizePath(out_pdf, mustWork = FALSE)))
