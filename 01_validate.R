@@ -18,8 +18,8 @@
 # The run at the bottom is a NOISE STUDY: several noise levels x many seeds
 # (default 5 x 20 = 100 runs). It reports recovery accuracy (|cor| of the
 # estimated subject / feature / temporal loadings with truth) per noise level
-# and writes output/01_validate.pdf: one figure with the recovery-vs-noise plot
-# (A) beside the estimated-vs-true curves at the lowest noise level (B).
+# and writes output/01_validate.pdf: one figure with the estimated-vs-true curves
+# at the lowest noise level (A) beside the recovery-vs-noise plot (B).
 # ============================================================================
 
 # pak::pkg_install("loulind/multi.tempted")
@@ -463,7 +463,7 @@ p_recovery <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading)) +
   THEME_MS + theme(plot.title    = element_text(hjust = 0.5, face = "bold"),
                    plot.subtitle = element_text(hjust = 0.5))
 
-# right panel: estimated vs true curves at the lowest noise level
+# left panel: estimated vs true curves at the lowest noise level
 .unit <- function(v) v / sqrt(sum(v^2))
 Mv <- low$sim$params$M; rv <- low$sim$params$r; mtch <- low$report$match
 curve_df <- do.call(rbind, lapply(1:Mv, function(m) do.call(rbind, lapply(1:rv, function(lh) {
@@ -494,8 +494,8 @@ p_curves <- ggplot(curve_df, aes(x = time, y = value, colour = series, linetype 
 # across subplots, so the two plotting areas would not line up.
 out_pdf <- file.path(.outdir, "01_validate.pdf")
 .leg_bottom <- theme(legend.position = "bottom", legend.justification = "center")
-p_fig <- ((p_recovery + .leg_bottom) | (p_curves + .leg_bottom)) +
-  plot_layout(widths = c(1, 1.6)) +
+p_fig <- ((p_curves + .leg_bottom) | (p_recovery + .leg_bottom)) +
+  plot_layout(widths = c(1.6, 1)) +
   plot_annotation(tag_levels = "A")
 
 ggsave(out_pdf, p_fig, width = 14, height = 6, bg = "white")
