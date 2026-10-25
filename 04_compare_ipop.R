@@ -76,6 +76,9 @@ MEF_OPTIMISE_GP <- TRUE    # TRUE = full GP lengthscale tuning
 ip   <- multi.tempted::ipop
 mods <- c("cytokine", "metabolome", "lipid", "protein")
 r <- 3
+# Stated explicitly rather than left to the package default, so the value used
+# here is auditable against what the manuscript reports.
+SMOOTH <- 1e-4              # kernel ridge penalty C_K^(m), all modalities
 
 # MEFISTO's per-subject Gaussian process requires every subject to share the same
 # set of visit times; a few iPOP subjects miss visits. We restrict to
@@ -125,19 +128,21 @@ if (file.exists(.rds)) {
     stop(sprintf(paste0("%s was saved under different settings:\n  saved:   %s\n  current: %s\n",
                         "Delete or rename it to start a fresh run."), .rds, cc$config, .sig))
   cached <- cc
-  cat(sprintf("reusing the completed run in %s; skipping both fits\n",
+  cat(sprintf("reusing the cached MEFISTO fit in %s; multiTEMPTED is refit\n",
               normalizePath(.rds, mustWork = FALSE)))
 }
 
-if (is.null(cached)) {
-  cat("\n== multiTEMPTED on iPOP ==\n")
-  mt <- multitempted_all(featuretables = featuretables,
-                         timepoints    = timepoints,
-                         subjectID     = subjectID,
-                         transforms    = "none",   # already log10
-                         do_ratio      = FALSE,    # not counts
-                         r             = r)        # centralize = TRUE (default)
-}
+# multiTEMPTED costs seconds, so it is ALWAYS refit; only the slow MEFISTO fit
+# is cached. That way a change to SMOOTH is picked up without touching MEFISTO.
+cat("\n== multiTEMPTED on iPOP ==\n")
+cat(sprintf("   smoothing penalty C_K = %g\n", SMOOTH))
+mt <- multitempted_all(featuretables = featuretables,
+                       timepoints    = timepoints,
+                       subjectID     = subjectID,
+                       transforms    = "none",   # already log10
+                       do_ratio      = FALSE,    # not counts
+                       smooth        = SMOOTH,
+                       r             = r)        # centralize = TRUE (default)
 
 
 # ============================================================================
@@ -233,20 +238,49 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
     for (l in 1:r) embed[[paste0("mef_F", l)]] <- Z_mef[, l]
     utils::write.csv(embed, .csv, row.names = FALSE)
     saveRDS(list(config = .sig, embed = embed, agree = agree, emb_cor = emb_cor,
-                 sex_mt = sex_mt, sex_mef = sex_mef), .rds)
+                 sex_mt = sex_mt, sex_mef = sex_mef, W = W), .rds)
     cat(sprintf("\n  run saved to %s and %s\n",
                 normalizePath(.csv, mustWork = FALSE),
                 normalizePath(.rds, mustWork = FALSE)))
   } else {
-    agree   <- cached$agree;  emb_cor <- cached$emb_cor
-    sex_mt  <- cached$sex_mt; sex_mef <- cached$sex_mef
-    A_mt    <- as.matrix(cached$embed[, paste0("mt_PC", 1:r), drop = FALSE])
+    # Reuse only the MEFISTO side; everything that depends on multiTEMPTED is
+    # recomputed against the fit just produced above.
+    sex_mef <- cached$sex_mef
     Z_mef   <- as.matrix(cached$embed[, paste0("mef_F", 1:r), drop = FALSE])
-    sex_v   <- cached$embed$sex
+    rownames(Z_mef) <- cached$embed$subject
+    common  <- intersect(rownames(mt$A_hat), cached$embed$subject)
+    A_mt    <- mt$A_hat[common, , drop = FALSE]
+    Z_mef   <- Z_mef[common, , drop = FALSE]
+    sex_v   <- cached$embed$sex[match(common, cached$embed$subject)]
+    emb_cor <- sapply(1:r, function(l) max(abs(stats::cor(Z_mef, A_mt[, l])), na.rm = TRUE))
+    sex_mt  <- abs(apply(A_mt, 2, function(s) stats::cor(s, sex_v)))
+
+    if (!is.null(cached$W)) {
+      W <- cached$W
+      agree <- sapply(mods, function(m) {
+        Bm <- mt$B_hat[[m]]
+        Wm <- W[[m]][rownames(Bm), , drop = FALSE]
+        sapply(1:r, function(l) max(abs(stats::cor(Wm, Bm[, l])), na.rm = TRUE))
+      })
+      rownames(agree) <- paste0("multiTEMPTED_PC", 1:r)
+    } else {
+      agree <- NULL   # checkpoint predates storing MEFISTO's weights
+    }
+
+    # refresh the saved artifact so its multiTEMPTED columns match this fit
+    embed <- data.frame(subject = common, sex = as.integer(sex_v), stringsAsFactors = FALSE)
+    for (l in 1:r) embed[[paste0("mt_PC", l)]] <- A_mt[, l]
+    for (l in 1:r) embed[[paste0("mef_F", l)]] <- Z_mef[, l]
+    utils::write.csv(embed, .csv, row.names = FALSE)
+    saveRDS(list(config = .sig, embed = embed, agree = agree, emb_cor = emb_cor,
+                 sex_mt = sex_mt, sex_mef = sex_mef, W = cached$W), .rds)
   }
 
   cat("\n-- feature-loading agreement (best |cor| between the methods' loadings) --\n")
-  print(round(agree, 2))
+  if (is.null(agree)) {
+    cat("  unavailable: this checkpoint predates storing MEFISTO's feature weights.\n")
+    cat("  Delete output/04_ipop.* and rerun to recompute it.\n")
+  } else print(round(agree, 2))
   cat("\n-- subject-embedding agreement: best |cor| of each multiTEMPTED score with a MEFISTO factor --\n")
   print(round(stats::setNames(emb_cor, paste0("PC", 1:r)), 2))
   cat("\n-- sex association |cor(score, sex)| per component (max = best sex-separating axis) --\n")
