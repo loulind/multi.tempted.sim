@@ -279,23 +279,33 @@ curve_df <- do.call(rbind, lapply(1:Mv, function(m) do.call(rbind, lapply(1:rv, 
   est <- .unit(ref$fit$Zeta_hat[[m]][, lh])
   tru <- .unit(ref$sim$truth$xi[[m]][[mtch[lh]]](tg))
   if (stats::cor(est, tru) < 0) est <- -est
-  pan <- sprintf("Modality %d - PC %d (%s)", m, lh,
-                 ref$sim$truth$shape_names[m, mtch[lh]])
-  rbind(data.frame(time = tg, value = tru, series = "true",         panel = pan),
-        data.frame(time = tg, value = est, series = "multiTEMPTED", panel = pan))
+  mod  <- sprintf("Modality %d (p = %d)", m, P_TARGET[m])
+  comp <- sprintf("Component %d", lh)
+  rbind(data.frame(time = tg, value = tru, series = "true",
+                   modality = mod, component = comp),
+        data.frame(time = tg, value = est, series = "multiTEMPTED",
+                   modality = mod, component = comp))
 }))))
-curve_df$series <- factor(curve_df$series, levels = c("true", "multiTEMPTED"))
+curve_df$series    <- factor(curve_df$series, levels = c("true", "multiTEMPTED"))
+curve_df$modality  <- factor(curve_df$modality,
+                             levels = sprintf("Modality %d (p = %d)", 1:Mv, P_TARGET[1:Mv]))
+curve_df$component <- factor(curve_df$component, levels = sprintf("Component %d", 1:rv))
 
 p_curves <- ggplot(curve_df, aes(x = time, y = value, colour = series, linetype = series)) +
   geom_line(linewidth = 0.8) +
-  facet_wrap(~ panel, ncol = rv, scales = "free_y") +
+  facet_grid(modality ~ component) +
   scale_colour_manual(values = c(true = "black", multiTEMPTED = "#4A90D9"), name = NULL) +
   scale_linetype_manual(values = c(true = "solid", multiTEMPTED = "22"), name = NULL) +
   labs(title = sprintf("Estimated vs true temporal loadings (n = %d, noise %g)",
                        ref_n, ref_nl),
        x = "Time", y = "Loading") +
+  # Shared y range across rows, clipped rather than filtered so the lines stay
+  # continuous at the boundary. Strip text is shrunk to fit the row labels,
+  # which are the longest, inside their strips.
+  coord_cartesian(ylim = c(-0.23, 0.23)) +
   THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-                   legend.position = "bottom")
+                   legend.position = "bottom",
+                   strip.text = element_text(size = 9))
 
 rec_df <- do.call(rbind, lapply(N_SUBS, function(n_sub) {
   d <- R_all[R_all$n == n_sub, , drop = FALSE]
@@ -307,11 +317,16 @@ rec_df$loading <- factor(rec_df$loading, levels = names(LOADING_COLS))
 rec_df$cohort  <- factor(sprintf("n = %d", rec_df$n),
                          levels = sprintf("n = %d", N_SUBS))
 
-p_rec <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading, linetype = cohort)) +
+# A small horizontal dodge separates the six series; the width is in log10
+# units because the x scale is logged, and the noise levels sit ~0.4 apart.
+.dodge <- position_dodge(width = 0.22)
+p_rec <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading, linetype = cohort,
+                            group = interaction(loading, cohort))) +
   geom_errorbar(aes(ymin = pmax(0, mean - sd), ymax = pmin(1, mean + sd)),
-                width = 0.04, linewidth = 0.3, alpha = 0.55, linetype = "solid") +
-  geom_line(linewidth = 0.7) +
-  geom_point(aes(shape = cohort), size = 2, alpha = 0.85) +
+                width = 0.03, linewidth = 0.3, alpha = 0.55, linetype = "solid",
+                position = .dodge) +
+  geom_line(linewidth = 0.7, position = .dodge) +
+  geom_point(aes(shape = cohort), size = 2, alpha = 0.85, position = .dodge) +
   scale_x_log10(breaks = NOISE_LEVELS, labels = NOISE_LEVELS) +
   scale_colour_manual(values = LOADING_COLS, name = "Loading") +
   scale_linetype_manual(values = c("solid", "22"), name = "Cohort") +
