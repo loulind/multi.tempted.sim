@@ -329,8 +329,8 @@ p_rec <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading, linetype = co
   geom_point(aes(shape = cohort), size = 2, alpha = 0.85, position = .dodge) +
   scale_x_log10(breaks = NOISE_LEVELS, labels = NOISE_LEVELS) +
   scale_colour_manual(values = LOADING_COLS, name = "Loading") +
-  scale_linetype_manual(values = c("solid", "22"), name = "Cohort") +
-  scale_shape_manual(values = c(16, 17), name = "Cohort") +
+  scale_linetype_manual(values = c("solid", "22"), name = "Sample size") +
+  scale_shape_manual(values = c(16, 17), name = "Sample size") +
   coord_cartesian(ylim = c(0, 1)) +
   labs(title = sprintf("Recovery accuracy (p = %s)", paste(P_TARGET, collapse = "/")),
        x = "Noise SD (log scale)", y = "|cor| with truth") +

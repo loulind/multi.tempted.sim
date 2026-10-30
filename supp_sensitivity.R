@@ -18,7 +18,11 @@
 # measure takes the largest absolute correlation across components, since a
 # perturbation can move the sex signal from one component to another.
 #
-# Writes supp_output/supp_fig_weights.pdf, supp_fig_smoothing.pdf and the
+# Before comparing, the perturbed components are matched to the reference ones,
+# so that a reordering is not mistaken for a loss of agreement. See compare().
+#
+# The weight sweep is reported as a figure, the smoothing sweep as a LaTeX
+# table. Writes supp_output/supp_fig_weights.pdf, supp_tab_smoothing.tex and the
 # underlying CSVs.
 # ============================================================================
 
@@ -134,18 +138,51 @@ ref   <- fit_one(rep(1, M), SMOOTH0)
 sex_v <- sex[rownames(ref$A_hat)]
 stopifnot(!any(is.na(sex_v)))
 
-# |cor| with the reference, component by component, for each kind of loading.
-# Feature and temporal loadings are averaged over modalities.
+# All r! orderings of the components, so they can be matched without pulling in
+# an assignment-problem dependency (r = 3 here, so six candidates).
+.perms <- function(n) {
+  if (n == 1L) return(list(1L))
+  do.call(c, lapply(seq_len(n), function(i)
+    lapply(.perms(n - 1L), function(p) c(i, p + (p >= i)))))
+}
+
+# |cor| with the reference fit, component by component, for each kind of
+# loading; feature and temporal are averaged over modalities.
+#
+# Components come out of the decomposition in decreasing order of explained
+# variation, and a perturbation can reorder two of similar size. Comparing
+# position by position would score that as lost agreement, so each perturbed fit
+# is first matched to the reference: the ordering is chosen on the subject
+# loadings alone, as the permutation maximising the diagonal sum of the |cor|
+# matrix, then applied to the feature and temporal loadings as well, so a
+# component keeps a single identity across all three. The unmatched values are
+# returned alongside, to show how much the matching moved.
 compare <- function(res) {
-  subj <- vapply(1:r, function(l) abs(stats::cor(res$A_hat[, l], ref$A_hat[, l])), numeric(1))
-  feat <- vapply(1:r, function(l) mean(vapply(1:M, function(m)
-    abs(stats::cor(res$B_hat[[m]][, l], ref$B_hat[[m]][, l])), numeric(1))), numeric(1))
-  temp <- vapply(1:r, function(l) mean(vapply(1:M, function(m)
-    abs(stats::cor(res$Zeta_hat[[m]][, l], ref$Zeta_hat[[m]][, l])), numeric(1))), numeric(1))
+  # C[i, j] = |cor(reference component i, perturbed component j)|
+  C     <- abs(stats::cor(ref$A_hat, res$A_hat))
+  cands <- .perms(r)
+  ord   <- cands[[which.max(vapply(cands, function(q)
+    sum(diag(C[, q, drop = FALSE])), numeric(1)))]]
+
+  A1 <- res$A_hat[, ord, drop = FALSE]
+  B1 <- lapply(res$B_hat, function(b) b[, ord, drop = FALSE])
+  Z1 <- lapply(res$Zeta_hat, function(z) z[, ord, drop = FALSE])
+
+  per_comp <- function(X0, X1) abs(diag(stats::cor(X0, X1)))
+  avg_mod  <- function(L0, L1) rowMeans(vapply(1:M, function(m)
+    per_comp(L0[[m]], L1[[m]]), numeric(r)))
+
   # a perturbation can move the sex signal between components, so take the best
   sex_max <- max(vapply(1:r, function(l)
     abs(stats::cor(res$A_hat[, l], sex_v)), numeric(1)))
-  list(subject = subj, feature = feat, temporal = temp, sex_max = sex_max)
+
+  list(order = ord, swapped = !all(ord == seq_len(r)), sex_max = sex_max,
+       subject  = per_comp(ref$A_hat, A1),
+       feature  = avg_mod(ref$B_hat, B1),
+       temporal = avg_mod(ref$Zeta_hat, Z1),
+       subject0  = per_comp(ref$A_hat, res$A_hat),
+       feature0  = avg_mod(ref$B_hat, res$B_hat),
+       temporal0 = avg_mod(ref$Zeta_hat, res$Zeta_hat))
 }
 
 summarise_fit <- function(res, extra) {
@@ -154,7 +191,10 @@ summarise_fit <- function(res, extra) {
     subject = mean(cp$subject), feature = mean(cp$feature), temporal = mean(cp$temporal),
     subject_PC1 = cp$subject[1], subject_PC2 = cp$subject[2], subject_PC3 = cp$subject[3],
     feature_PC1 = cp$feature[1], temporal_PC1 = cp$temporal[1],
-    sex_max = cp$sex_max, stringsAsFactors = FALSE))
+    sex_max = cp$sex_max,
+    order = paste(cp$order, collapse = "-"), swapped = cp$swapped,
+    subject_unmatched = mean(cp$subject0), feature_unmatched = mean(cp$feature0),
+    temporal_unmatched = mean(cp$temporal0), stringsAsFactors = FALSE))
 }
 
 # ---- weight perturbation ----------------------------------------------------
@@ -182,6 +222,11 @@ print(transform(sres[, c("C_K", "subject", "feature", "temporal", "sex_max")],
                 subject = round(subject, 4), feature = round(feature, 4),
                 temporal = round(temporal, 4), sex_max = round(sex_max, 4)),
       row.names = FALSE)
+cat("\n-- component matching: ordering chosen on the subject loadings --\n")
+print(wres[, c("setting", "order", "swapped", "subject_unmatched", "subject")],
+      row.names = FALSE, digits = 4)
+cat(sprintf("fits whose components were reordered: %d of %d\n",
+            sum(wres$swapped), nrow(wres)))
 cat(sprintf("\nsex association at equal weights: %.4f\n", sex_ref))
 cat(sprintf("weights:   loading agreement >= %.4f ; sex %.4f to %.4f\n",
             min(c(wres$subject, wres$feature, wres$temporal)),
@@ -191,8 +236,37 @@ cat(sprintf("smoothing: loading agreement >= %.4f ; sex %.4f to %.4f\n",
             min(sres$sex_max), max(sres$sex_max)))
 
 utils::write.csv(wres, file.path(.outdir, "supp_sensitivity_weights.csv"), row.names = FALSE)
-utils::write.csv(sres, file.path(.outdir, "supp_sensitivity_smoothing.csv"), row.names = FALSE)
 utils::write.csv(wtab, file.path(.outdir, "supp_sensitivity_weight_values.csv"), row.names = FALSE)
+
+# ---- smoothing sweep: supplementary table ----------------------------------
+# Reported as a table rather than a figure, written as a standalone document so
+# the file compiles on its own. To \input{} it into the manuscript instead, drop
+# the preamble and the closing \end{document}.
+.tex <- file.path(.outdir, "supp_tab_smoothing.tex")
+writeLines(c(
+  "\\documentclass{article}",
+  "\\usepackage{array}",
+  "",
+  "\\begin{document}",
+  "",
+  "\\begin{table}[ht]",
+  "\\centering",
+  paste0("\\caption{Sensitivity of the iPOP fit to the temporal smoothing ",
+         "penalty $C_K$.}"),
+  "\\label{tab:supp-smoothing}",
+  "\\begin{tabular}{lcccc}",
+  "\\hline",
+  "$C_K$ & Subject & Feature & Temporal & Sex association \\\\",
+  "\\hline",
+  sprintf("$10^{%d}$%s & %.4f & %.4f & %.4f & %.4f \\\\",
+          round(log10(sres$C_K)),
+          ifelse(sres$C_K == SMOOTH0, " (reference)", ""),
+          sres$subject, sres$feature, sres$temporal, sres$sex_max),
+  "\\hline",
+  "\\end{tabular}",
+  "\\end{table}",
+  "",
+  "\\end{document}"), .tex)
 
 
 # ---- figures ----------------------------------------------------------------
@@ -214,15 +288,21 @@ wl <- do.call(rbind, lapply(mods, function(md) {
 wl$loading  <- factor(wl$loading, levels = names(LOAD_COLS))
 wl$modality <- factor(wl$modality, levels = mods)
 
+# The subject and feature curves very nearly coincide, so the three series are
+# dodged apart. The width is in log2 units because the x scale is logged, where
+# the closest pair of multipliers (0.75 and 1) sits 0.42 apart.
+.wdodge <- position_dodge(width = 0.16)
+
 p_w1 <- ggplot(wl, aes(x = x, y = value, colour = loading)) +
   geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
-  geom_line(linewidth = 0.7) + geom_point(size = 2, alpha = 0.85) +
+  geom_line(linewidth = 0.7, position = .wdodge) +
+  geom_point(size = 2, alpha = 0.85, position = .wdodge) +
   facet_wrap(~ modality, nrow = 1) +
-  scale_x_continuous(breaks = MULTS, labels = MULTS) +
+  scale_x_continuous(transform = "log2", breaks = MULTS, labels = MULTS) +
   scale_colour_manual(values = LOAD_COLS, name = "Loading") +
   coord_cartesian(ylim = c(0, 1)) +
   labs(title = "Correlation with the equal-weight fit loadings (iPOP)",
-       x = "Weight multiplier", y = "|cor|") +
+       x = "Weight multiplier (log2 scale)", y = "|cor|") +
   THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
                    legend.position = "bottom")
 
@@ -239,11 +319,11 @@ p_w2 <- ggplot(ws, aes(x = mult, y = sex_max)) +
   geom_line(linewidth = 0.7, colour = "#4A90D9") +
   geom_point(size = 2, alpha = 0.85, colour = "#4A90D9") +
   facet_wrap(~ modality, nrow = 1) +
-  scale_x_continuous(breaks = MULTS, labels = MULTS) +
+  scale_x_continuous(transform = "log2", breaks = MULTS, labels = MULTS) +
   coord_cartesian(ylim = c(0, 1)) +
   labs(title = "Association of the subject loadings with sex (iPOP)",
        subtitle = sprintf("dashed line: equal weights (%.2f)", sex_ref),
-       x = "Weight multiplier", y = "max |cor(component, sex)|") +
+       x = "Weight multiplier (log2 scale)", y = "max |cor(component, sex)|") +
   THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
                    plot.subtitle = element_text(hjust = 0.5),
                    legend.position = "none")
@@ -253,36 +333,6 @@ ggsave(file.path(.outdir, "supp_fig_weights.pdf"),
          plot_annotation(tag_levels = "A"),
        width = 12, height = 8.5, bg = "white")
 
-# smoothing
-sl <- long_loadings(sres, "C_K")
-sl$loading <- factor(sl$loading, levels = names(LOAD_COLS))
-p_s1 <- ggplot(sl, aes(x = x, y = value, colour = loading)) +
-  geom_hline(yintercept = 1, linetype = "dotted", colour = "grey60") +
-  geom_line(linewidth = 0.7) + geom_point(size = 2, alpha = 0.85) +
-  scale_x_log10(breaks = SMOOTHS, labels = format(SMOOTHS, scientific = TRUE)) +
-  scale_colour_manual(values = LOAD_COLS, name = "Loading") +
-  coord_cartesian(ylim = c(0, 1)) +
-  labs(title = "Agreement with the reference fit",
-       x = expression(C[K]~"(log scale)"), y = "|cor| with reference") +
-  THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-                   legend.position = "bottom")
-
-p_s2 <- ggplot(sres, aes(x = C_K, y = sex_max)) +
-  geom_hline(yintercept = sex_ref, linetype = "dashed", colour = "grey40") +
-  geom_line(linewidth = 0.7, colour = "#4A90D9") +
-  geom_point(size = 2, alpha = 0.85, colour = "#4A90D9") +
-  scale_x_log10(breaks = SMOOTHS, labels = format(SMOOTHS, scientific = TRUE)) +
-  expand_limits(y = 0) +
-  labs(title = "Sex association of the subject loadings",
-       subtitle = sprintf("dashed line: reference C_K (%.2f)", sex_ref),
-       x = expression(C[K]~"(log scale)"), y = "max |cor(component, sex)|") +
-  THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-                   plot.subtitle = element_text(hjust = 0.5))
-
-ggsave(file.path(.outdir, "supp_fig_smoothing.pdf"),
-       (p_s1 | p_s2) + plot_annotation(tag_levels = "A"),
-       width = 11, height = 4.8, bg = "white")
-
-cat(sprintf("\n  figures written to %s\n  and                %s\n",
+cat(sprintf("\n  figure written to %s\n  table written to  %s\n",
             normalizePath(file.path(.outdir, "supp_fig_weights.pdf"), mustWork = FALSE),
-            normalizePath(file.path(.outdir, "supp_fig_smoothing.pdf"), mustWork = FALSE)))
+            normalizePath(.tex, mustWork = FALSE)))
