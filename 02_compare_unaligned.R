@@ -1,26 +1,26 @@
 # ============================================================================
-# exp1_unaligned_mxf.R   (storyline point 2)
+# 02_compare_unaligned.R
 #
-# Setting that is HARD for MEFISTO and natural for multiTEMPTED:
+# Setting that is hard for MEFISTO and natural for multiTEMPTED:
 #   * m x f temporal functions: every (modality, component) pair has its OWN
 #     curve, so the temporal dynamics differ ACROSS modalities.
 #   * unaligned timepoints: each subject and each modality is sampled at its own
 #     random times (no samples co-measured across modalities).
 #
-# Over a handful of random seeds we compare, for each method:
+# Over a handful of random seeds, each method is scored on:
 #   (a) computation time, and
-#   (b) function estimation -- how well the estimated temporal curves match truth.
+#   (b) function estimation: how well the estimated temporal curves match truth.
 #
-# Expected story: multiTEMPTED is fast and recovers every curve; MEFISTO is slow
-# on unaligned data and, because a MEFISTO factor carries ONE trajectory shared
-# across views, it cannot reproduce curves that differ across modalities.
+# multiTEMPTED is fast and recovers every curve; MEFISTO is slow on unaligned
+# data and, because a MEFISTO factor carries ONE trajectory shared across views,
+# it cannot reproduce curves that differ across modalities.
 #
 # --- MEFISTO / run settings (efficient here; make them fair for the real run) --
-#   N_SEEDS         -> number of random datasets (<= 10 in the paper)
+#   N_SEEDS         -> number of random datasets
 #   MEF_MAXITER 100 -> raise (e.g. 1000) for full convergence
 #   MEF_CONVERGENCE -> "fast" (checking) or "slow" (fair)
 #   MEF_OPTIMISE_GP -> FALSE (checking; much faster). TRUE tunes the GP length-
-#                      scale -- MEFISTO's fair setting, but far slower, ESPECIALLY
+#                      scale: MEFISTO's fair setting, but far slower, ESPECIALLY
 #                      on the unaligned data used here.
 # ============================================================================
 

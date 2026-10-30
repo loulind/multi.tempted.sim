@@ -1,5 +1,5 @@
 # ============================================================================
-# 03_compare_aligned.R   (storyline point 3)
+# 03_compare_aligned.R
 #
 # PURPOSE
 # Hand MEFISTO the kind of data it was designed for, and ask whether

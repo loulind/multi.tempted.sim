@@ -1,5 +1,5 @@
 # ============================================================================
-# compare_ipop.R
+# 04_compare_ipop.R
 #
 # Apply BOTH multiTEMPTED and MEFISTO (MOFA2) to the REAL iPOP longitudinal
 # multi-omic dataset shipped with the multi.tempted package, and compare them.
