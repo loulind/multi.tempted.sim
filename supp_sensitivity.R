@@ -4,7 +4,7 @@
 # Sensitivity of the iPOP analysis to two tuning choices: the modality weights
 # w_m and the kernel ridge penalty C_K^(m).
 #
-# Everything else matches 04_compare_ipop.R: same subject filter, same
+# Everything else matches 02_ipop.R: same subject filter, same
 # preprocessing, r = 3. The reference fit is equal weights with C_K = 1e-4.
 #
 # Weights are perturbed locally around equal weighting: one modality at a time
@@ -63,7 +63,7 @@ SMOOTHS  <- c(1e-6, 1e-5, 1e-4, 1e-3, 1e-2)     # sweep, equal weights
 set.seed(1)
 
 
-# ---- iPOP data and preprocessing (identical to 04_compare_ipop.R) ----------
+# ---- iPOP data and preprocessing (identical to 02_ipop.R) ----------
 ip   <- multi.tempted::ipop
 mods <- c("cytokine", "metabolome", "lipid", "protein")
 

@@ -1,5 +1,5 @@
 # ============================================================================
-# 04_compare_ipop.R
+# 02_ipop.R
 #
 # Apply BOTH multiTEMPTED and MEFISTO (MOFA2) to the REAL iPOP longitudinal
 # multi-omic dataset shipped with the multi.tempted package, and compare them.
@@ -48,7 +48,7 @@ METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
     of <- sys.frame(i)$ofile
     if (!is.null(of)) { d <- dirname(normalizePath(of, mustWork = FALSE)); break }
   }
-  if (is.null(d)) {                                     # Rscript 04_compare_ipop.R
+  if (is.null(d)) {                                     # Rscript 02_ipop.R
     a <- commandArgs(trailingOnly = FALSE)
     a <- sub("^--file=", "", a[grepl("^--file=", a)])
     if (length(a)) d <- dirname(normalizePath(a[1], mustWork = FALSE))
@@ -112,12 +112,12 @@ cat(sprintf("iPOP: %d of %d subjects with all %d visits, %d modalities, features
 # ============================================================================
 # --- saving the completed run ----------------------------------------------
 # The MEFISTO fit here is slow, so the whole run is saved ONCE when it finishes:
-# the subject embeddings to 04_ipop.csv and the agreement tables to 04_ipop.rds.
+# the subject embeddings to 02_ipop.csv and the agreement tables to 02_ipop.rds.
 # Re-running the script then goes straight to the figure, so the plot can be
 # restyled without repeating either fit. Delete the files to force a fresh run;
 # the script refuses to reuse results saved under other settings.
-.csv <- file.path(.outdir, "04_ipop.csv")
-.rds <- file.path(.outdir, "04_ipop.rds")
+.csv <- file.path(.outdir, "02_ipop.csv")
+.rds <- file.path(.outdir, "02_ipop.rds")
 .sig <- sprintf("r=%d|mods=%s|mef=%d/%s/%s", r, paste(mods, collapse = "+"),
                 MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
 
@@ -279,7 +279,7 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   cat("\n-- feature-loading agreement (best |cor| between the methods' loadings) --\n")
   if (is.null(agree)) {
     cat("  unavailable: this checkpoint predates storing MEFISTO's feature weights.\n")
-    cat("  Delete output/04_ipop.* and rerun to recompute it.\n")
+    cat("  Delete output/02_ipop.* and rerun to recompute it.\n")
   } else print(round(agree, 2))
   cat("\n-- subject-embedding agreement: best |cor| of each multiTEMPTED score with a MEFISTO factor --\n")
   print(round(stats::setNames(emb_cor, paste0("PC", 1:r)), 2))
@@ -301,7 +301,7 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   # theme_bw(base_size = 12), legends collected across the two panels.
   SEX_COLS <- c(male = "#4A90D9", female = "#E05C5C")
   sex_lab  <- factor(ifelse(sex_v == 1, "male", "female"), levels = names(SEX_COLS))
-  .pdf <- file.path(.outdir, "04_compare_ipop.pdf")
+  .pdf <- file.path(.outdir, "02_ipop.pdf")
 
   .scatter <- function(d, title, xlab, ylab)
     ggplot(d, aes(x = x, y = y, colour = sex)) +

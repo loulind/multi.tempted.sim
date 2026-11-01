@@ -1,9 +1,9 @@
 # ============================================================================
-# 03_compare_aligned.R
+# 05_compare_aligned.R
 #
 # PURPOSE
 # Hand MEFISTO the kind of data it was designed for, and ask whether
-# multiTEMPTED still matches or beats it. Script 02 shows multiTEMPTED winning
+# multiTEMPTED still matches or beats it. Script 04 shows multiTEMPTED winning
 # where MEFISTO is structurally unable to compete, because a MEFISTO factor
 # carries one trajectory shared across modalities and cannot express dynamics
 # that differ between them. That result only carries weight if multiTEMPTED also
@@ -33,7 +33,7 @@
 #               subject's modalities stay co-measured, as they would be if drawn
 #               in one sitting; "sample" jitters per (subject, modality), so
 #               nothing is co-measured.
-#   "UNALIGNED" every subject x modality draws its own random times, as in 02.
+#   "UNALIGNED" every subject x modality draws its own random times, as in 04.
 #
 #   These choices dominate MEFISTO's runtime -- more so than any other knob here.
 #   Its GP step additionally fits a group x group covariance whenever subjects
@@ -44,7 +44,7 @@
 #   ranking reverses. multiTEMPTED's cost is unaffected throughout.
 #
 # CHECKPOINTING
-#   Long runs are resumable: finished seeds are flushed to output/03_sims.csv
+#   Long runs are resumable: finished seeds are flushed to output/05_sims.csv
 #   every CKPT_EVERY seeds, and re-running picks up at the first missing seed.
 #   Each seed re-seeds the RNG from its own index, so a resumed run reproduces an
 #   uninterrupted one exactly. Delete the CSV to start over; the script refuses
@@ -74,7 +74,7 @@ TIME_JITTER     <- 0.02               # sd of the visit-time noise when CLUSTERE
 CLUSTER_BY      <- "visit"           # CLUSTERED only: "sample" | "visit" (see header)
 
 N_SEEDS         <- 100
-CKPT_EVERY      <- 10                 # flush results to output/03_sims.csv every n seeds
+CKPT_EVERY      <- 10                 # flush results to output/05_sims.csv every n seeds
 MEF_MAXITER     <- 1000
 MEF_CONVERGENCE <- "slow"
 MEF_OPTIMISE_GP <- TRUE
@@ -95,7 +95,7 @@ stopifnot(SAMPLING %in% c("ALIGNED", "CLUSTERED", "UNALIGNED"),
     of <- sys.frame(i)$ofile
     if (!is.null(of)) { d <- dirname(normalizePath(of, mustWork = FALSE)); break }
   }
-  if (is.null(d)) {                                     # Rscript 03_compare_aligned.R
+  if (is.null(d)) {                                     # Rscript 05_compare_aligned.R
     a <- commandArgs(trailingOnly = FALSE)
     a <- sub("^--file=", "", a[grepl("^--file=", a)])
     if (length(a)) d <- dirname(normalizePath(a[1], mustWork = FALSE))
@@ -227,10 +227,10 @@ cat(sprintf("== exp2: 1 x f (shared) curves, %s sampling, block structure; %d se
 # Every seed is self-contained: gen_block(s) calls set.seed(s) before drawing
 # anything, so seed s always produces the same data and the same fit no matter
 # what ran before it. That is what makes a resumed run agree with a start-to-
-# finish run. Finished seeds are flushed to output/03_sims.csv every CKPT_EVERY
+# finish run. Finished seeds are flushed to output/05_sims.csv every CKPT_EVERY
 # seeds; on start-up we read that file and only run the seeds still missing.
-.csv <- file.path(.outdir, "03_sims.csv")
-.rds <- file.path(.outdir, "03_sims.rds")    # same rows, exact doubles (see .write_ckpt)
+.csv <- file.path(.outdir, "05_sims.csv")
+.rds <- file.path(.outdir, "05_sims.rds")    # same rows, exact doubles (see .write_ckpt)
 
 # Config stamp: refuse to resume onto a checkpoint written under different
 # settings, which would silently mix incompatible simulations.
@@ -326,7 +326,7 @@ cat("\n== summary over seeds (mean +/- sd) ==\n"); print(summ, row.names = FALSE
 # ============================================================================
 # figure: boxplots across seeds + summary table page
 # ============================================================================
-.pdf <- file.path(.outdir, "03_compare_aligned.pdf")
+.pdf <- file.path(.outdir, "05_compare_aligned.pdf")
 
 box_df <- rbind(
   data.frame(method = "multiTEMPTED", value = R_all$mt_miscl, panel = "miscl"),

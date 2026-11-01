@@ -1,5 +1,5 @@
 # ============================================================================
-# 02_compare_unaligned.R
+# 04_compare_unaligned.R
 #
 # Setting that is hard for MEFISTO and natural for multiTEMPTED:
 #   * m x f temporal functions: every (modality, component) pair has its OWN
@@ -46,7 +46,7 @@ METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
     of <- sys.frame(i)$ofile
     if (!is.null(of)) { d <- dirname(normalizePath(of, mustWork = FALSE)); break }
   }
-  if (is.null(d)) {                                     # Rscript 02_compare_unaligned.R
+  if (is.null(d)) {                                     # Rscript 04_compare_unaligned.R
     a <- commandArgs(trailingOnly = FALSE)
     a <- sub("^--file=", "", a[grepl("^--file=", a)])
     if (length(a)) d <- dirname(normalizePath(a[1], mustWork = FALSE))
@@ -173,12 +173,12 @@ cat(sprintf("== exp1: m x f (modality-specific) curves, unaligned; %d seeds ==\n
 
 # --- saving the completed run ----------------------------------------------
 # The MEFISTO fits here take hours, so the whole run is saved ONCE when the last
-# seed finishes: metrics to 02_sims.csv and everything the figure needs to
-# 02_sims.rds. Re-running the script then goes straight to the figure, so the
+# seed finishes: metrics to 04_sims.csv and everything the figure needs to
+# 04_sims.rds. Re-running the script then goes straight to the figure, so the
 # plot can be restyled without repeating the fits. Delete the files to force a
 # fresh run; the script refuses to reuse results saved under other settings.
-.csv <- file.path(.outdir, "02_sims.csv")
-.rds <- file.path(.outdir, "02_sims.rds")
+.csv <- file.path(.outdir, "04_sims.csv")
+.rds <- file.path(.outdir, "04_sims.rds")
 .sig <- sprintf("N=%d|M=%d|P=%d|R=%d|NT=%d|noise=%g|lam=%s|seeds=%d|mef=%d/%s/%s",
                 N, M, P, R, NT, NOISE, paste(LAMBDA[1:R], collapse = "+"),
                 N_SEEDS, MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
@@ -234,7 +234,7 @@ cat("\n== summary over seeds ==\n"); print(summ, row.names = FALSE)
 .align <- function(e, ref) if (stats::cor(e, ref) < 0) -e else e
 fine   <- seq(0, 1, length.out = 200)
 
-.pdf <- file.path(.outdir, "02_compare_unaligned.pdf")
+.pdf <- file.path(.outdir, "04_compare_unaligned.pdf")
 
 if (is.null(cached)) {
   k1 <- keep_seed1
