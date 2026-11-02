@@ -11,17 +11,11 @@
 #   (a) computation time, and
 #   (b) function estimation: how well the estimated temporal curves match truth.
 #
-# multiTEMPTED is fast and recovers every curve; MEFISTO is slow on unaligned
-# data and, because a MEFISTO factor carries ONE trajectory shared across views,
-# it cannot reproduce curves that differ across modalities.
-#
-# --- MEFISTO / run settings (efficient here; make them fair for the real run) --
-#   N_SEEDS         -> number of random datasets
-#   MEF_MAXITER 100 -> raise (e.g. 1000) for full convergence
-#   MEF_CONVERGENCE -> "fast" (checking) or "slow" (fair)
-#   MEF_OPTIMISE_GP -> FALSE (checking; much faster). TRUE tunes the GP length-
-#                      scale: MEFISTO's fair setting, but far slower, ESPECIALLY
-#                      on the unaligned data used here.
+# --- run settings ---
+#   N_SEEDS          number of random datasets
+#   MEF_MAXITER      number of MEFISTO iterations
+#   MEF_CONVERGENCE  "fast" or "slow" (stricter) convergence criterion
+#   MEF_OPTIMISE_GP  TRUE tunes the GP lengthscale (much slower), FALSE fixes it
 # ============================================================================
 
 library(multi.tempted)
@@ -29,17 +23,10 @@ library(ggplot2)
 library(patchwork)
 
 # --- plot aesthetics --------------------------------------------------------
-# Deliberately kept in the analysis scripts rather than inside multi.tempted's
-# plotting functions, so they can be changed without touching the package.
-# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
 THEME_MS    <- theme_bw(base_size = 12)
 METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
-# Everything is written to <this script's folder>/output, NOT to getwd(), so the
-# results land in the project no matter where the session's working directory
-# happens to point. Covers source()/RStudio "Source", Rscript, and running lines
-# interactively in RStudio; if none of those can identify the file it falls back
-# to getwd() and says so.
+# Output goes to output/ beside this script, not getwd().
 .outdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
@@ -172,11 +159,9 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) stop("Install MOFA2: BiocManager
 cat(sprintf("== exp1: m x f (modality-specific) curves, unaligned; %d seeds ==\n", N_SEEDS))
 
 # --- saving the completed run ----------------------------------------------
-# The MEFISTO fits here take hours, so the whole run is saved ONCE when the last
-# seed finishes: metrics to 04_sims.csv and everything the figure needs to
-# 04_sims.rds. Re-running the script then goes straight to the figure, so the
-# plot can be restyled without repeating the fits. Delete the files to force a
-# fresh run; the script refuses to reuse results saved under other settings.
+# The finished run is saved to 04_sims.csv and 04_sims.rds and reused on the
+# next run. Delete the files to force a fresh run. Saved results from other
+# settings are not reused.
 .csv <- file.path(.outdir, "04_sims.csv")
 .rds <- file.path(.outdir, "04_sims.rds")
 .sig <- sprintf("N=%d|M=%d|P=%d|R=%d|NT=%d|noise=%g|lam=%s|seeds=%d|mef=%d/%s/%s",

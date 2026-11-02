@@ -40,8 +40,7 @@
 library(PMCMRplus)
 library(readxl)
 
-# Everything is read from and written to folders beside this script, NOT
-# getwd(), so it runs the same from source()/RStudio "Source" or Rscript.
+# Input and output folders are located beside this script, not getwd().
 .scriptdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source

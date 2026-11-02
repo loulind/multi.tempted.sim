@@ -11,18 +11,12 @@
 # measured at 5 shared visits during an exercise challenge. All modalities are on
 # a log10 scale and share visits, so samples are naturally aligned across views.
 #
-# --- MEFISTO speed settings, set in the knobs just below the library() call ---
-# The MEFISTO step trains a per-subject Gaussian process and is the slow part.
-#   MEF_MAXITER      -> more iterations = fuller convergence, slower
-#   MEF_CONVERGENCE  -> "fast" or "slow" (stricter) convergence criterion
-#   MEF_OPTIMISE_GP  -> TRUE tunes the GP lengthscale (MEFISTO at full capability);
-#                       it runs even on iPOP's 4 views but is considerably slower.
-#                       FALSE just fixes the lengthscale for a quicker fit.
-# For quick code-checking use MEF_MAXITER = 100, "fast", GP off; for the real
-# comparison use many iterations, "slow", and GP on.
-# Also: MEFISTO needs every subject at the same visit times, so we keep only
-# complete-visit subjects (applied to both methods); multiTEMPTED would not need
-# this.
+# --- MEFISTO settings (set below the library() calls) ---
+#   MEF_MAXITER      number of iterations
+#   MEF_CONVERGENCE  "fast" or "slow" (stricter) convergence criterion
+#   MEF_OPTIMISE_GP  TRUE tunes the GP lengthscale (slower), FALSE fixes it
+# Both methods use only the subjects sampled at all five visits, as MEFISTO
+# requires shared visit times.
 # ============================================================================
 
 # pak::pkg_install("loulind/multi.tempted")
@@ -31,17 +25,10 @@ library(ggplot2)
 library(patchwork)
 
 # --- plot aesthetics --------------------------------------------------------
-# Deliberately kept in the analysis scripts rather than inside multi.tempted's
-# plotting functions, so they can be changed without touching the package.
-# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
 THEME_MS    <- theme_bw(base_size = 12)
 METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
-# Everything is written to <this script's folder>/output, NOT to getwd(), so the
-# results land in the project no matter where the session's working directory
-# happens to point. Covers source()/RStudio "Source", Rscript, and running lines
-# interactively in RStudio; if none of those can identify the file it falls back
-# to getwd() and says so.
+# Output goes to output/ beside this script, not getwd().
 .outdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
@@ -76,14 +63,10 @@ MEF_OPTIMISE_GP <- TRUE    # TRUE = full GP lengthscale tuning
 ip   <- multi.tempted::ipop
 mods <- c("cytokine", "metabolome", "lipid", "protein")
 r <- 3
-# Stated explicitly rather than left to the package default, so the value used
-# here is auditable against what the manuscript reports.
 SMOOTH <- 1e-4              # kernel ridge penalty C_K^(m), all modalities
 
-# MEFISTO's per-subject Gaussian process requires every subject to share the same
-# set of visit times; a few iPOP subjects miss visits. We restrict to
-# complete-visit subjects and apply the same filter to BOTH methods, so the
-# comparison is on identical data. (multiTEMPTED alone would not need this.)
+# MEFISTO requires every subject to share the same visit times, so both methods
+# use only the subjects sampled at all visits.
 sid_all  <- as.character(ip$meta_visit$SubjectID)
 n_visits <- max(table(sid_all))
 keep_row <- sid_all %in% names(which(table(sid_all) == n_visits))
@@ -111,11 +94,9 @@ cat(sprintf("iPOP: %d of %d subjects with all %d visits, %d modalities, features
 # multiTEMPTED
 # ============================================================================
 # --- saving the completed run ----------------------------------------------
-# The MEFISTO fit here is slow, so the whole run is saved ONCE when it finishes:
-# the subject embeddings to 02_ipop.csv and the agreement tables to 02_ipop.rds.
-# Re-running the script then goes straight to the figure, so the plot can be
-# restyled without repeating either fit. Delete the files to force a fresh run;
-# the script refuses to reuse results saved under other settings.
+# The finished run is saved to 02_ipop.csv and 02_ipop.rds and reused on the
+# next run. Delete the files to force a fresh run. Saved results from other
+# settings are not reused.
 .csv <- file.path(.outdir, "02_ipop.csv")
 .rds <- file.path(.outdir, "02_ipop.rds")
 .sig <- sprintf("r=%d|mods=%s|mef=%d/%s/%s", r, paste(mods, collapse = "+"),
@@ -132,8 +113,7 @@ if (file.exists(.rds)) {
               normalizePath(.rds, mustWork = FALSE)))
 }
 
-# multiTEMPTED costs seconds, so it is ALWAYS refit; only the slow MEFISTO fit
-# is cached. That way a change to SMOOTH is picked up without touching MEFISTO.
+# multiTEMPTED is always refit; only the slow MEFISTO fit is cached.
 cat("\n== multiTEMPTED on iPOP ==\n")
 cat(sprintf("   smoothing penalty C_K = %g\n", SMOOTH))
 mt <- multitempted_all(featuretables = featuretables,
@@ -184,7 +164,7 @@ run_mefisto <- function(featuretables, timepoints, subjectID, n_factors,
   topt$seed <- seed; topt$convergence_mode <- convergence
   topt$maxiter <- maxiter; topt$verbose <- FALSE
   eopt <- MOFA2::get_default_mefisto_options(obj)
-  if (!optimise_gp)                            # skip the (crashing) GP hyperparam step
+  if (!optimise_gp)                            # skip the GP hyperparameter optimisation
     eopt$start_opt <- eopt$opt_freq <- as.integer(maxiter + 1L)
 
   obj <- MOFA2::prepare_mofa(obj, data_options = dopt, model_options = mopt,
@@ -243,8 +223,7 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
                 normalizePath(.csv, mustWork = FALSE),
                 normalizePath(.rds, mustWork = FALSE)))
   } else {
-    # Reuse only the MEFISTO side; everything that depends on multiTEMPTED is
-    # recomputed against the fit just produced above.
+    # reuse the saved MEFISTO fit and recompute everything that depends on multiTEMPTED
     sex_mef <- cached$sex_mef
     Z_mef   <- as.matrix(cached$embed[, paste0("mef_F", 1:r), drop = FALSE])
     rownames(Z_mef) <- cached$embed$subject
@@ -264,7 +243,7 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
       })
       rownames(agree) <- paste0("multiTEMPTED_PC", 1:r)
     } else {
-      agree <- NULL   # checkpoint predates storing MEFISTO's weights
+      agree <- NULL   # older saved runs do not store MEFISTO's weights
     }
 
     # refresh the saved artifact so its multiTEMPTED columns match this fit
@@ -297,8 +276,6 @@ if (!requireNamespace("MOFA2", quietly = TRUE)) {
   cat("  agreement reflects different models, not one being 'wrong'.\n")
 
   # ---- (iv) PDF: first two subject components, both methods, coloured by sex --
-  # Aesthetics follow the MOMSPI analysis: geom_point(size = 2, alpha = 0.8),
-  # theme_bw(base_size = 12), legends collected across the two panels.
   SEX_COLS <- c(male = "#4A90D9", female = "#E05C5C")
   sex_lab  <- factor(ifelse(sex_v == 1, "male", "female"), levels = names(SEX_COLS))
   .pdf <- file.path(.outdir, "02_ipop.pdf")

@@ -1,8 +1,9 @@
 # ============================================================================
 # supp_ablation.R
 #
-# PURPOSE (reviewer 1, comment 5)
-# Ablation of the modality-specific temporal loadings. Data are generated
+# PURPOSE
+# Comparison of multiTEMPTED with and without modality-specific temporal
+# loadings. Data are generated
 # exactly as in 05_compare_aligned.R (shared curves across modalities,
 # co-measured visits, block-structured subjects), but over a range of noise
 # levels, and only two models are fitted:
@@ -11,8 +12,8 @@
 #     component shared by all modalities. With co-measured visits, equal weights and a common
 #     smoothing penalty, this is exactly multiTEMPTED applied to the
 #     concatenated features of all modalities.
-# MEFISTO is not run. At NOISE = 1 and seeds 1..100 the multiTEMPTED results
-# reproduce those of 05_compare_aligned.R exactly. (Supplementary Figure S3)
+# MEFISTO is not run. At NOISE = 1 the multiTEMPTED results match those of
+# 05_compare_aligned.R. (Supplementary Figure S3)
 #
 # OUTPUT (supp_output/)
 #   supp_ablation.csv        one row per (noise level, seed), both models
@@ -53,8 +54,7 @@ N_SEEDS <- 100
 
 dir.create(.outdir, showWarnings = FALSE, recursive = TRUE)
 
-# --- copied verbatim from 05_compare_aligned.R (data generator + scoring);
-# NOISE is set per level in the loop below ---
+# --- data generator and scoring, as in 05_compare_aligned.R ---
 SAMPLING <- "CLUSTERED"; TIME_JITTER <- 0.02; CLUSTER_BY <- "visit"
 N <- 15; M <- 3; P <- 24; R <- 3; NT <- 8; LAMBDA <- c(8, 6, 4); OFFGROUP <- 0.05
 shapes <- list(s_curve    = function(u) 1 / (1 + exp(-12 * (u - 0.5))),
@@ -107,7 +107,7 @@ misclass <- function(load, grp, r) {
 }
 .acor <- function(x, y) { v <- suppressWarnings(abs(stats::cor(x, y))); if (is.na(v)) 0 else v }
 
-# --- new: fit full and restricted (shared-trajectory) models on one dataset ---
+# --- fit full and restricted (shared-trajectory) models on one dataset ---
 fit_pair <- function(seed) {
   sim <- gen_block(seed); grp <- sim$truth$subj_group
   q <- function(...) suppressMessages(multitempted_all(...))
@@ -147,8 +147,8 @@ utils::write.csv(res, file.path(.outdir, "supp_ablation.csv"), row.names = FALSE
 
 r <- res
 # ============================================================================
-# figure: line summaries over noise; panel titles and y-axis metrics follow
-# 05_compare_aligned.pdf (Figure 5), plus subject loading recovery
+# figure: line summaries over noise, as in 05_compare_aligned.pdf, plus subject
+# loading recovery
 # ============================================================================
 THEME_MS    <- theme_bw(base_size = 12)
 METHOD_COLS <- c(multiTEMPTED = "#4A90D9", "multiTEMPTED (shared trajectory)" = "#D98E2B")

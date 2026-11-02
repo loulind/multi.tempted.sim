@@ -27,8 +27,7 @@ library(patchwork)
 THEME_MS     <- theme_bw(base_size = 12)
 OUTCOME_COLS <- c(PTB = "#E05C5C", TB = "#4A90D9")
 
-# Everything is read from and written to folders beside this script, NOT
-# getwd(), so it runs the same from source()/RStudio "Source" or Rscript.
+# Input and output folders are located beside this script, not getwd().
 .scriptdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source

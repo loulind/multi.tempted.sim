@@ -1,61 +1,37 @@
 # ============================================================================
 # 05_compare_aligned.R
 #
-# PURPOSE
-# Hand MEFISTO the kind of data it was designed for, and ask whether
-# multiTEMPTED still matches or beats it. Script 04 shows multiTEMPTED winning
-# where MEFISTO is structurally unable to compete, because a MEFISTO factor
-# carries one trajectory shared across modalities and cannot express dynamics
-# that differ between them. That result only carries weight if multiTEMPTED also
-# holds up on MEFISTO's own ground, which is what this script tests.
+# Comparison of multiTEMPTED and MEFISTO on data that match MEFISTO's
+# assumptions (Simulation 3.1).
 #
-# DESIGN, AND WHY
-#   * 1 x f temporal functions -- each component uses the SAME curve in every
-#     modality. This is a dynamic MEFISTO CAN represent, so any remaining gap is
-#     about estimation quality rather than model class.
-#   * block structure -- subjects split into r groups (one per component), with a
-#     matching feature subset per modality, so component l is "on" only for
-#     group-l subjects and subset-l features. This plants a discrete ground truth
-#     that can be scored without worrying about sign or scale conventions.
-#   * group = subject -- MEFISTO gets its per-subject GP but is NOT told which
-#     subjects belong to the same block; both methods have to discover that.
+# DESIGN
+#   * shared temporal functions: each component uses the same curve in every
+#     modality.
+#   * block structure: subjects are split into r groups, with a matching
+#     feature subset per modality, so component l is active only for group-l
+#     subjects and subset-l features.
+#   * MEFISTO groups = subjects, so neither method is told the block membership.
 #
-# MEASURED over many random seeds
-#   (a) group loading       -- misclassification error (1 - assignment accuracy)
-#   (b) function estimation -- |cor| of the estimated temporal curve with truth
+# MEASURED over random seeds
+#   (a) misclassification error of the group assignment
+#   (b) |cor| of the estimated temporal curve with truth
+#   (c) computation time
 #
 # SAMPLING DESIGN (SAMPLING, CLUSTER_BY)
-#   "ALIGNED"   every subject and modality share one time grid, so everything is
-#               co-measured -- the cleanest possible case for MEFISTO.
-#   "CLUSTERED" samples fall in a small cloud around the nominal visit times
-#               (sd = TIME_JITTER): a fixed schedule that real subjects drift
-#               from. CLUSTER_BY = "visit" jitters once per subject, so that
-#               subject's modalities stay co-measured, as they would be if drawn
-#               in one sitting; "sample" jitters per (subject, modality), so
-#               nothing is co-measured.
+#   "ALIGNED"   every subject and modality share one time grid.
+#   "CLUSTERED" samples are jittered around the nominal visit times
+#               (sd = TIME_JITTER). CLUSTER_BY = "visit" jitters once per
+#               subject, so a subject's modalities stay co-measured. "sample"
+#               jitters per (subject, modality).
 #   "UNALIGNED" every subject x modality draws its own random times, as in 04.
 #
-#   These choices dominate MEFISTO's runtime -- more so than any other knob here.
-#   Its GP step additionally fits a group x group covariance whenever subjects
-#   share covariate values, which makes ALIGNED far slower than the alternatives
-#   and impractical at paper scale. Among the rest, cost climbs steeply with the
-#   number of distinct (subject, time) samples, so with GP optimisation ON the
-#   co-measured CLUSTER_BY = "visit" is the cheaper option; with it OFF the
-#   ranking reverses. multiTEMPTED's cost is unaffected throughout.
-#
 # CHECKPOINTING
-#   Long runs are resumable: finished seeds are flushed to output/05_sims.csv
-#   every CKPT_EVERY seeds, and re-running picks up at the first missing seed.
-#   Each seed re-seeds the RNG from its own index, so a resumed run reproduces an
-#   uninterrupted one exactly. Delete the CSV to start over; the script refuses
-#   to resume onto a checkpoint written under different settings.
+#   Finished seeds are flushed to output/05_sims.csv every CKPT_EVERY seeds, and
+#   re-running resumes at the first missing seed. Delete the CSV to start over.
+#   Checkpoints written under different settings are not reused.
 #
 # RUN / MEFISTO SETTINGS
-#   N_SEEDS is the paper scale; drop it for a quick check. MEF_MAXITER,
-#   MEF_CONVERGENCE and MEF_OPTIMISE_GP trade speed for fairness: fewer
-#   iterations with "fast" and GP optimisation off for checking, more iterations
-#   with "slow" and GP optimisation on for the real comparison -- the fair
-#   setting, and much the slowest.
+#   N_SEEDS, MEF_MAXITER, MEF_CONVERGENCE and MEF_OPTIMISE_GP, as in 04.
 # ============================================================================
 
 library(multi.tempted)
@@ -63,9 +39,6 @@ library(ggplot2)
 library(patchwork)
 
 # --- plot aesthetics --------------------------------------------------------
-# Deliberately kept in the analysis scripts rather than inside multi.tempted's
-# plotting functions, so they can be changed without touching the package.
-# Palette and theme follow the MOMSPI analysis so all manuscript figures match.
 THEME_MS    <- theme_bw(base_size = 12)
 METHOD_COLS <- c(multiTEMPTED = "#4A90D9", MEFISTO = "#E05C5C")
 
@@ -84,11 +57,7 @@ N <- 15; M <- 3; P <- 24; R <- 3; NT <- 8; NOISE <- 1.0; LAMBDA <- c(8, 6, 4); O
 stopifnot(SAMPLING %in% c("ALIGNED", "CLUSTERED", "UNALIGNED"),
           CLUSTER_BY %in% c("sample", "visit"))
 
-# Everything is written to <this script's folder>/output, NOT to getwd(), so the
-# results land in the project no matter where the session's working directory
-# happens to point. Covers source()/RStudio "Source", Rscript, and running lines
-# interactively in RStudio; if none of those can identify the file it falls back
-# to getwd() and says so.
+# Output goes to output/ beside this script, not getwd().
 .outdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
@@ -224,11 +193,9 @@ cat(sprintf("== exp2: 1 x f (shared) curves, %s sampling, block structure; %d se
             tolower(SAMPLING), N_SEEDS))
 
 # --- checkpointing ----------------------------------------------------------
-# Every seed is self-contained: gen_block(s) calls set.seed(s) before drawing
-# anything, so seed s always produces the same data and the same fit no matter
-# what ran before it. That is what makes a resumed run agree with a start-to-
-# finish run. Finished seeds are flushed to output/05_sims.csv every CKPT_EVERY
-# seeds; on start-up we read that file and only run the seeds still missing.
+# Each seed calls set.seed(s) before drawing data, so a resumed run matches an
+# uninterrupted one. Finished seeds are flushed every CKPT_EVERY seeds and only
+# missing seeds are run.
 .csv <- file.path(.outdir, "05_sims.csv")
 .rds <- file.path(.outdir, "05_sims.rds")    # same rows, exact doubles (see .write_ckpt)
 
@@ -239,11 +206,8 @@ cat(sprintf("== exp2: 1 x f (shared) curves, %s sampling, block structure; %d se
                 paste(LAMBDA[1:R], collapse = "+"),   # no commas: keeps the CSV one-field-per-column
                 MEF_MAXITER, MEF_CONVERGENCE, MEF_OPTIMISE_GP)
 
-# The CSV is the readable artifact, but no decimal format R writes round-trips a
-# double exactly (as.numeric mis-rounds long digit strings), so a CSV-only resume
-# would shift recovered metrics by ~1e-16. The .rds alongside it stores the same
-# rows as exact doubles and is what we actually resume from; the CSV still gates
-# whether a resume happens at all, so deleting it starts a clean run either way.
+# Results are also stored as exact doubles in the .rds, which is used to resume.
+# Deleting the CSV starts a clean run.
 .write_ckpt <- function(tab) {
   tab <- tab[order(tab$seed), , drop = FALSE]
   row.names(tab) <- NULL

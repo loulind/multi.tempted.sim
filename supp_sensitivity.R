@@ -7,11 +7,9 @@
 # Everything else matches 02_ipop.R: same subject filter, same
 # preprocessing, r = 3. The reference fit is equal weights with C_K = 1e-4.
 #
-# Weights are perturbed locally around equal weighting: one modality at a time
-# is multiplied by each of WEIGHT_MULT, then all weights are renormalised to sum
-# to the number of modalities. Renormalising matters because the penalty term is
-# not multiplied by the weights, so leaving them unscaled would also change the
-# effective smoothing and confound the two effects.
+# Weights are perturbed one modality at a time by each of WEIGHT_MULT, then
+# renormalised to sum to the number of modalities, so that the effective
+# smoothing is unchanged.
 #
 # Each perturbed fit is compared with the reference on the subject, feature and
 # temporal loadings, and on how strongly the subject loadings track sex. The sex
@@ -30,7 +28,7 @@ library(multi.tempted)
 library(ggplot2)
 library(patchwork)
 
-# Everything is written to <this script's folder>/supp_output, not to getwd().
+# Output goes to supp_output/ beside this script, not getwd().
 .outdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {
@@ -123,9 +121,7 @@ cat("\n-- modality weights (each row sums to M) --\n")
 print(wtab, row.names = FALSE)
 
 # ---- fits ------------------------------------------------------------------
-# maxiter/epsilon must match multitempted_all()'s defaults, NOT
-# multi_tempted_decomp()'s own (maxiter = 20), or the reference fit stops early:
-# the iPOP components need 24-46 iterations to converge.
+# maxiter and epsilon as in the multitempted_all() defaults
 fit_one <- function(w, smooth) {
   res <- multi_tempted_decomp(datlists = datlists_decomp, r = r, smooth = smooth,
                               maxiter = 100, epsilon = 1e-4, weights = unname(w))
@@ -149,14 +145,9 @@ stopifnot(!any(is.na(sex_v)))
 # |cor| with the reference fit, component by component, for each kind of
 # loading; feature and temporal are averaged over modalities.
 #
-# Components come out of the decomposition in decreasing order of explained
-# variation, and a perturbation can reorder two of similar size. Comparing
-# position by position would score that as lost agreement, so each perturbed fit
-# is first matched to the reference: the ordering is chosen on the subject
-# loadings alone, as the permutation maximising the diagonal sum of the |cor|
-# matrix, then applied to the feature and temporal loadings as well, so a
-# component keeps a single identity across all three. The unmatched values are
-# returned alongside, to show how much the matching moved.
+# Perturbed components are first matched to the reference by the permutation
+# that maximises agreement of the subject loadings, and the same permutation is
+# applied to the feature and temporal loadings. Unmatched values are also returned.
 compare <- function(res) {
   # C[i, j] = |cor(reference component i, perturbed component j)|
   C     <- abs(stats::cor(ref$A_hat, res$A_hat))
@@ -239,9 +230,7 @@ utils::write.csv(wres, file.path(.outdir, "supp_sensitivity_weights.csv"), row.n
 utils::write.csv(wtab, file.path(.outdir, "supp_sensitivity_weight_values.csv"), row.names = FALSE)
 
 # ---- smoothing sweep: supplementary table ----------------------------------
-# Reported as a table rather than a figure, written as a standalone document so
-# the file compiles on its own. To \input{} it into the manuscript instead, drop
-# the preamble and the closing \end{document}.
+# written as a standalone LaTeX document
 .tex <- file.path(.outdir, "supp_tab_smoothing.tex")
 writeLines(c(
   "\\documentclass{article}",
@@ -288,9 +277,7 @@ wl <- do.call(rbind, lapply(mods, function(md) {
 wl$loading  <- factor(wl$loading, levels = names(LOAD_COLS))
 wl$modality <- factor(wl$modality, levels = mods)
 
-# The subject and feature curves very nearly coincide, so the three series are
-# dodged apart. The width is in log2 units because the x scale is logged, where
-# the closest pair of multipliers (0.75 and 1) sits 0.42 apart.
+# horizontal dodge (in log2 units) to separate overlapping series
 .wdodge <- position_dodge(width = 0.16)
 
 p_w1 <- ggplot(wl, aes(x = x, y = value, colour = loading)) +
@@ -306,9 +293,7 @@ p_w1 <- ggplot(wl, aes(x = x, y = value, colour = loading)) +
   THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
                    legend.position = "bottom")
 
-# Faceted like panel A, so the two rows share x breaks and panel widths. The
-# equal-weight fit is carried into every facet at mult = 1, as it is in panel
-# A, so each line runs through the reference rather than jumping across it.
+# faceted like panel A, with the equal-weight fit shown at mult = 1 in every facet
 ws <- wres[wres$modality != "equal", c("modality", "mult", "sex_max")]
 ws <- rbind(ws, data.frame(modality = mods, mult = 1, sex_max = sex_ref))
 ws$modality <- factor(ws$modality, levels = mods)

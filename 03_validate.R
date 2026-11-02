@@ -63,8 +63,6 @@ CKPT_EVERY   <- 10
 TIMING_PASS  <- TRUE    # re-time one seed per (n, noise) sequentially
 
 # ---- data generator and recovery metric -------------------------------------
-# (moved here verbatim from the former 01a_validate.R, which this script
-# used to source at run time)
 
 # ---- temporal loading function shapes -------
 # Each shape is a function of u in [0, 1] (the generator maps the real time
@@ -75,11 +73,10 @@ TIMING_PASS  <- TRUE    # re-time one seed per (n, noise) sequentially
 # the next r shapes, so every (modality, component) pair gets a UNIQUE curve:
 # with M = r = 3, mod1 = shapes 1-3, mod2 = shapes 4-6, mod3 = shapes 7-9.
 #
-# The order is deliberate. Each modality gets one monotone, one single-bend and
-# one multi-bend curve. And the two affine pairs (concave/convex and
-# m_shaped/w_shaped, where one is 1 - the other) are split across different
-# modalities: two affinely dependent temporal loadings inside the SAME modality
-# would be degenerate. Swap the whole thing via `temporal_funcs`.
+# Each modality gets one monotone, one single-bend and one multi-bend curve.
+# The affine pairs (concave/convex and m_shaped/w_shaped) are placed in
+# different modalities to avoid degenerate temporal loadings within a modality.
+# Swap the whole library via `temporal_funcs`.
 temporal_shape_library <- list(
   # -- modality 1 --
   s_curve    = function(u) 1 / (1 + exp(-12 * (u - 0.5))), # S-shaped
@@ -99,8 +96,7 @@ temporal_shape_library <- list(
 # ---- small helpers (preceding dot hides function from global env) -------
 
 # Trapezoidal integral of y over the (sorted) grid x.
-# Cohort size at which this parameterisation matches the original one, where A
-# had unit norm and lambda was undivided.
+# Reference cohort size used to scale lambda (see the generator).
 A_NORM_REF <- 30
 
 .trapz <- function(x, y) sum(diff(x) * (utils::head(y, -1) + utils::tail(y, -1)) / 2)
@@ -185,8 +181,7 @@ generate_multitempted_data <- function(
   # -- Modality scaling (lambda) (M x r matrix) --
   if (is.null(lambda)) {
     # Divided by sqrt(A_NORM_REF) to pair with subject loadings of L2 norm
-    # sqrt(n) below: together these keep the per-subject signal independent of
-    # n, and reproduce the original parameterisation exactly at n = A_NORM_REF.
+    # sqrt(n) below, so the per-subject signal does not depend on n.
     lam_vec <- lambda_max * lambda_decay^(1:r - 1) / sqrt(A_NORM_REF)
     Lambda_true <- matrix(lam_vec, M, r, byrow = TRUE)
   } else if (is.matrix(lambda)) {
@@ -441,9 +436,8 @@ fit_one <- function(n_sub, nl, s) {
                                     noise_sd = nl, seed = s)
   sim <- pad_features(sim, P_TARGET, nl, s)
 
-  # The package reports "Converged: dif = X after N iterations" even when the
-  # loop exits because it reached maxiter, so capture the messages and judge
-  # convergence from dif against EPSILON rather than from the wording.
+  # The package prints "Converged" even when maxiter is reached, so judge
+  # convergence from dif against EPSILON.
   msgs <- character(0)
   el <- system.time(
     fit <- withCallingHandlers(
@@ -508,9 +502,8 @@ row.names(R_all) <- NULL
 utils::write.csv(R_all, .csv, row.names = FALSE)
 
 # ---- clean timing pass ------------------------------------------------------
-# Runs above may have been evaluated in parallel, which inflates each run's wall
-# clock through contention. Re-time one seed per (n, noise) with nothing else
-# running, and quote those as the runtime.
+# Parallel runs inflate wall-clock time, so one seed per (n, noise) is re-timed
+# sequentially and used as the reported runtime.
 .tcsv <- file.path(.outdir, "03_validate_timing.csv")
 timing <- if (file.exists(.tcsv)) utils::read.csv(.tcsv, stringsAsFactors = FALSE) else NULL
 if (TIMING_PASS) {
@@ -597,9 +590,7 @@ p_curves <- ggplot(curve_df, aes(x = time, y = value, colour = series, linetype 
   labs(title = sprintf("Estimated vs true temporal loadings (n = %d, noise %g)",
                        ref_n, ref_nl),
        x = "Time", y = "Loading") +
-  # Shared y range across rows, clipped rather than filtered so the lines stay
-  # continuous at the boundary. Strip text is shrunk to fit the row labels,
-  # which are the longest, inside their strips.
+  # shared y range across rows, clipped rather than filtered
   coord_cartesian(ylim = c(-0.23, 0.23)) +
   THEME_MS + theme(plot.title = element_text(hjust = 0.5, face = "bold"),
                    legend.position = "bottom",
@@ -615,8 +606,7 @@ rec_df$loading <- factor(rec_df$loading, levels = names(LOADING_COLS))
 rec_df$cohort  <- factor(sprintf("n = %d", rec_df$n),
                          levels = sprintf("n = %d", N_SUBS))
 
-# A small horizontal dodge separates the six series; the width is in log10
-# units because the x scale is logged, and the noise levels sit ~0.4 apart.
+# horizontal dodge (in log10 units) to separate the six series
 .dodge <- position_dodge(width = 0.22)
 p_rec <- ggplot(rec_df, aes(x = noise, y = mean, colour = loading, linetype = cohort,
                             group = interaction(loading, cohort))) +

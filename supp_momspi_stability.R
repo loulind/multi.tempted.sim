@@ -1,7 +1,7 @@
 # ============================================================================
 # supp_momspi_stability.R
 #
-# PURPOSE (reviewer 1, comment 7)
+# PURPOSE
 # Stability of the MOMS-PI cytokine feature loadings (Supplementary Figure S1).
 # In the joint microbiome + cytokine fit of 01_momspi.R, IL-1ra and GM-CSF are
 # the two cytokines with the largest absolute loadings, with opposite signs, in
@@ -30,8 +30,7 @@ FRAC       <- 0.8
 SEED       <- 2024
 R          <- 3
 
-# Everything is read from and written to folders beside this script, NOT
-# getwd(), so it runs the same from source()/RStudio "Source" or Rscript.
+# Input and output folders are located beside this script, not getwd().
 .scriptdir <- local({
   d <- NULL
   for (i in seq_len(sys.nframe())) {                    # source() / RStudio Source
